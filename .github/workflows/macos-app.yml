@@ -1,0 +1,90 @@
+name: macOS app
+
+# Builds melograb.app + a drag-to-install DMG for Apple Silicon and Intel,
+# self-tests the finished app, and attaches the DMGs to a GitHub release
+# when a v* tag is pushed. Download the DMGs from the run's "Artifacts".
+on:
+  workflow_dispatch:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+    paths:  # branch pushes only build when the app could have changed (tags always build)
+      - "melograb/**"
+      - "packaging/**"
+      - "assets/**"
+      - "run_gui.py"
+      - "requirements.txt"
+      - ".github/workflows/macos-app.yml"
+
+jobs:
+  build:
+    name: DMG (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    env:
+      HAS_SIGNING_CERT: ${{ secrets.MACOS_CERTIFICATE != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest      # Apple Silicon
+            arch: arm64
+          - runner: macos-15-intel    # Intel
+            arch: x86_64
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Import signing certificate
+        if: env.HAS_SIGNING_CERT == 'true'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+
+      - name: Build app and DMG
+        env:
+          PYTHON: python
+          MELOGRAB_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: packaging/build_macos.sh
+
+      - name: Online smoke test (real album fetch + one download)
+        # YouTube sometimes blocks datacenter IPs, so this informs but never fails the build.
+        continue-on-error: true
+        run: dist/melograb.app/Contents/MacOS/melograb --self-test --online
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: melograb-macos-${{ matrix.arch }}
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dmgs
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dmgs/*.dmg
+          generate_release_notes: true

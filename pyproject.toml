@@ -1,0 +1,22 @@
+[project]
+name = "melograb"
+version = "0.1.0"
+description = "Spotify playlist/album/track puller: API or CSV metadata, YouTube Music matching, tagged MP3/M4A/Opus output."
+requires-python = ">=3.9"
+dependencies = [
+    "ytmusicapi>=1.9.0",
+    "yt-dlp>=2024.8.6",
+    "mutagen>=1.47.0",
+    "rapidfuzz>=3.9.0",
+    "requests>=2.32.0",
+    "tqdm>=4.66.0",
+    "pillow>=10.4.0",
+]
+
+[project.scripts]
+melograb = "melograb.cli:main"
+melograb-gui = "melograb.gui:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

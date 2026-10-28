@@ -120,3 +120,33 @@ def test_non_jpeg_cover_is_converted(monkeypatch):
     monkeypatch.setattr(tag.requests, "get", lambda url, timeout: Resp())
     data, mime = _real_fetch_cover.__wrapped__("https://example.invalid/x.webp")
     assert mime == "image/jpeg" and data.startswith(b"\xff\xd8")
+
+
+@requires_ffmpeg
+def test_source_comment_and_explicit(tmp_path, track):
+    from mutagen.id3 import ID3
+    from mutagen.mp4 import MP4
+
+    track.video_id, track.explicit = "abcdefghijk", True
+    mp3 = make_audio(str(tmp_path / "a.mp3"))
+    tag.tag_file(mp3, track)
+    tags = ID3(mp3)
+    assert tags.getall("COMM")[0].text == ["Source: https://music.youtube.com/watch?v=abcdefghijk"]
+    assert tags.getall("TXXX:ITUNESADVISORY")[0].text == ["1"]
+    m4a = make_audio(str(tmp_path / "a.m4a"))
+    tag.tag_file(m4a, track)
+    assert MP4(m4a)["rtng"] == [1]
+
+
+@requires_ffmpeg
+@pytest.mark.parametrize("ext", [".mp3", ".m4a", ".opus"])
+def test_embed_lyrics_keeps_other_tags(tmp_path, track, ext):
+    from mutagen import File
+
+    path = make_audio(str(tmp_path / f"a{ext}"))
+    tag.tag_file(path, track)
+    assert not tag.has_lyrics(path)
+    tag.embed_lyrics(path, LRC, "plain")
+    assert tag.has_lyrics(path)
+    assert File(path, easy=True)["title"] == ["Mosquito"]
+    assert os.path.exists(tmp_path / "a.lrc")

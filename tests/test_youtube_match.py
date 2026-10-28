@@ -29,7 +29,7 @@ def test_prefers_original_over_variants_and_wrong_duration(monkeypatch):
         song("long", "Bad Dream - Alternate Version", "Flower Face", 320),
         song("good", "Bad Dream (Alternate Version)", "Flower Face", 201),
     ])
-    monkeypatch.setattr(youtube_match, "_client", lambda: fake)
+    monkeypatch.setattr(youtube_match, "client", lambda: fake)
     ranked = youtube_match.rank_matches(t, limit=3)
     assert ranked[0]["videoId"] == "good"
     assert "videos" not in fake.calls  # strong song match, no need for videos
@@ -41,19 +41,19 @@ def test_rejects_garbage_and_falls_back_to_videos(monkeypatch):
         [song("junk", "Completely Different", "Other Person", 180)],
         [song("vid", "Dijon - coogie (Official Video)", "Dijon TV", 182, kind="video")],
     )
-    monkeypatch.setattr(youtube_match, "_client", lambda: fake)
+    monkeypatch.setattr(youtube_match, "client", lambda: fake)
     ranked = youtube_match.rank_matches(t)
     assert [r["videoId"] for r in ranked] == ["vid"]
 
 
 def test_no_match(monkeypatch):
     t = Track(title="Nothing", artist="Nobody")
-    monkeypatch.setattr(youtube_match, "_client", lambda: FakeYT([], []))
+    monkeypatch.setattr(youtube_match, "client", lambda: FakeYT([], []))
     assert youtube_match.find_best_match(t) is None
 
 
 def test_featured_artists_dont_hurt(monkeypatch):
     t = Track(title="Song (feat. Guest)", artist="Main, Guest", duration_ms=100_000)
     fake = FakeYT([song("a", "Song", "Main", 100), song("b", "Song 2", "Main", 100)])
-    monkeypatch.setattr(youtube_match, "_client", lambda: fake)
+    monkeypatch.setattr(youtube_match, "client", lambda: fake)
     assert youtube_match.rank_matches(t)[0]["videoId"] == "a"

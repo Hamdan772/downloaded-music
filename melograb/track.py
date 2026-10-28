@@ -36,9 +36,18 @@ class Track:
     cover_url: str = ""
     isrc: str = ""
     spotify_id: str = ""
+    explicit: bool = False
+    # Name of the playlist/album/search this track came from (for templates).
+    playlist: str = ""
+    # Known YouTube video for this track (YouTube Music sources, or a link
+    # the user picked by hand) -- skips matching. video_type is "song" for
+    # official audio, "video" for music videos/uploads.
+    video_id: str = ""
+    video_type: str = ""
+    # Re-download even if the output file exists (e.g. after fixing a match).
+    replace_existing: bool = False
     lyrics_lrc: str = ""
     lyrics_plain: str = ""
-    extra_artists: list = field(default_factory=list)
 
     @property
     def search_query(self) -> str:
@@ -57,3 +66,24 @@ class Track:
     @property
     def display_name(self) -> str:
         return f"{self.artist} - {self.title}" if self.artist else self.title
+
+    @property
+    def youtube_url(self) -> str:
+        return f"https://music.youtube.com/watch?v={self.video_id}" if self.video_id else ""
+
+    @property
+    def duration_text(self) -> str:
+        if not self.duration_ms:
+            return ""
+        seconds = round(self.duration_ms / 1000)
+        return f"{seconds // 60}:{seconds % 60:02d}"
+
+
+@dataclass
+class Collection:
+    """A batch of tracks from one source (playlist, album, search, CSV...)."""
+
+    kind: str  # "playlist", "album", "track", "artist", "search", "csv", "youtube-*", "multiple"
+    name: str
+    cover_url: str = ""
+    tracks: list = field(default_factory=list)

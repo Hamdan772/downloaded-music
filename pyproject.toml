@@ -1,7 +1,7 @@
 [project]
 name = "melograb"
 dynamic = ["version"]
-description = "Spotify playlist/album puller: public-page or CSV metadata, YouTube Music matching, tagged MP3/M4A/Opus output with synced lyrics."
+description = "Spotify / YouTube Music / CSV to a tagged MP3, M4A or Opus library: smart YouTube Music matching, synced lyrics, file-layout templates, GUI + CLI."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

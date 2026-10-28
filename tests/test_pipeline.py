@@ -19,8 +19,9 @@ def fakes(monkeypatch):
             {"videoId": f"{track.title}-2"},
         ]
 
-    def download(video_id, out_dir, stem, fmt):
+    def download(video_id, out_dir, stem, fmt, quality="best", remove_non_music=False):
         state["downloads"].append(video_id)
+        state.setdefault("calls", []).append((video_id, quality, remove_non_music))
         if video_id in state["fail_ids"]:
             raise downloader.DownloadError("video is unavailable")
         os.makedirs(out_dir, exist_ok=True)
@@ -38,7 +39,8 @@ def fakes(monkeypatch):
 def test_run_basic_grouping_and_order(tmp_path, fakes):
     tracks = [Track("A", "X", album="Alb"), Track("B", "Y")]
     seen = []
-    results = pipeline.run(tracks, str(tmp_path), "mp3", 2, on_result=lambda i, r: seen.append(i))
+    opts = pipeline.Options(workers=2)
+    results = pipeline.run(tracks, str(tmp_path), opts, on_result=lambda i, r: seen.append(i))
     assert [r.status for r in results] == ["done", "done"]
     assert results[0].path == str(tmp_path / "Alb" / "X - A.mp3")
     # No Spotify album -> YouTube Music's album name and a bigger thumbnail
@@ -71,7 +73,7 @@ def test_skips_existing_and_duplicates(tmp_path, fakes):
     os.makedirs(tmp_path / "Alb")
     open(tmp_path / "Alb" / "X - A.mp3", "wb").close()
     tracks = [Track("A", "X", album="Alb"), Track("B", "X", album="Alb"), Track("B", "X", album="Alb")]
-    results = pipeline.run(tracks, str(tmp_path), "mp3", 1)
+    results = pipeline.run(tracks, str(tmp_path), pipeline.Options(workers=1))
     assert [r.status for r in results] == ["skipped", "done", "duplicate"]
     assert fakes["downloads"] == ["B-1"]
 
@@ -100,3 +102,56 @@ def test_write_m3u_and_summary(tmp_path, fakes):
     assert os.path.basename(m3u) == "My-Playlist.m3u8"
     assert open(m3u, encoding="utf-8").read() == "#EXTM3U\n#EXTINF:61,X - A\nAlb/X - A.mp3\n"
     assert pipeline.summarize_failures(results) == [("video is unavailable", 1)]
+
+
+def test_known_video_skips_matching_and_sponsorblock_only_for_videos(tmp_path, fakes, monkeypatch):
+    def no_search(track, limit=3):
+        raise AssertionError("should not search")
+
+    monkeypatch.setattr(youtube_match, "rank_matches", no_search)
+    tracks = [Track("A", "X", album="Alb", video_id="vidA", video_type="song"),
+              Track("B", "Y", album="Alb", video_id="vidB", video_type="video")]
+    results = pipeline.run(tracks, str(tmp_path), pipeline.Options(quality="320"))
+    assert [r.status for r in results] == ["done", "done"]
+    assert sorted(fakes["calls"]) == [("vidA", "320", False), ("vidB", "320", True)]
+
+
+def test_sponsorblock_can_be_disabled(tmp_path, fakes):
+    pipeline.run([Track("A", "X", album="Alb", video_id="v", video_type="video")], str(tmp_path),
+                 pipeline.Options(remove_non_music=False))
+    assert fakes["calls"] == [("v", "best", False)]
+
+
+def test_template_and_replace_existing(tmp_path, fakes):
+    opts = pipeline.Options(template="{album_artist}/{album}/{track:02} {title}", fmt="m4a")
+    track = Track("Song", "X", album="Alb", album_artist="X", track_number=4)
+    target = tmp_path / "X" / "Alb" / "04 Song.m4a"
+    os.makedirs(target.parent)
+    target.write_bytes(b"old")
+    (r,) = pipeline.run([track], str(tmp_path), opts)
+    assert r.status == "skipped" and r.path == str(target)
+
+    track.replace_existing = True
+    (r,) = pipeline.run([track], str(tmp_path), opts)
+    assert r.status == "done" and r.path == str(target) and target.read_bytes() == b""
+
+
+def test_successful_match_is_remembered(tmp_path, fakes):
+    track = Track("A", "X", album="Alb")
+    (r,) = pipeline.run([track], str(tmp_path))
+    assert (r.video_id, track.video_id, track.video_type) == ("A-1", "A-1", "video")
+
+
+def test_invalid_options_rejected(tmp_path, fakes):
+    with pytest.raises(ValueError):
+        pipeline.run([Track("A", "X")], str(tmp_path), pipeline.Options(template="{bogus}"))
+    with pytest.raises(ValueError):
+        pipeline.run([Track("A", "X")], str(tmp_path), pipeline.Options(quality="999"))
+
+
+def test_preview(fakes):
+    fakes["candidates"] = [{"videoId": "v", "title": "T", "artists": [{"name": "A"}], "_score": 90.0}]
+    (m,) = pipeline.preview([Track("T", "A")])
+    assert m["display"] == "A - T" and m["videoId"] == "v"
+    fakes["candidates"] = []
+    assert pipeline.preview([Track("T", "A")]) == [None]

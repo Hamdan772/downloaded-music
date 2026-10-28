@@ -26,10 +26,25 @@ _FEAT_RE = re.compile(
     r"\s*[\(\[]\s*(?:feat\.?|ft\.?|featuring|with)\s[^\)\]]*[\)\]]|\s+(?:feat\.|ft\.|featuring)\s.*$", re.I
 )
 
+_THUMB_SIZE_RE = re.compile(r"=w\d+-h\d+")
+
 _local = threading.local()
 
 
-def _client() -> YTMusic:
+def bigger_thumbnail(url: str, size: int = 600) -> str:
+    """YouTube Music thumbnails are tiny (60-120px) but the same URL serves
+    any size."""
+    return _THUMB_SIZE_RE.sub(f"=w{size}-h{size}", url)
+
+
+def best_thumbnail(thumbnails) -> str:
+    thumbs = [t for t in thumbnails or [] if isinstance(t, dict) and t.get("url")]
+    if not thumbs:
+        return ""
+    return bigger_thumbnail(max(thumbs, key=lambda t: t.get("width") or 0)["url"])
+
+
+def client() -> YTMusic:
     # ytmusicapi keeps a requests session per client; give each worker thread
     # its own instead of sharing one across the download pool.
     yt = getattr(_local, "ytmusic", None)
@@ -88,7 +103,7 @@ def _score(track: Track, result: dict) -> float:
 
 def rank_matches(track: Track, limit: int = 3) -> list[dict]:
     """Up to `limit` plausible candidates, best first (each gets a `_score`)."""
-    yt = _client()
+    yt = client()
     results = [r for r in yt.search(track.search_query, filter="songs", limit=10) if r.get("videoId")]
     scored = [(r, _score(track, r)) for r in results]
 

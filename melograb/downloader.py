@@ -13,6 +13,9 @@ from . import env
 log = logging.getLogger(__name__)
 
 FORMATS = ("mp3", "m4a", "opus")
+# "best" = highest-quality VBR when transcoding; numbers are kbps. When the
+# source is already in the target codec it's copied untouched either way.
+QUALITIES = ("best", "320", "256", "192", "128")
 
 # Prefer a source stream that's already in the target codec so m4a/opus
 # don't get needlessly re-encoded.
@@ -69,13 +72,21 @@ class _YtdlpLogger:
         log.error(_ANSI_RE.sub("", msg))
 
 
-def _ydl_opts(tmp_dir: str, fmt: str) -> dict:
+def _ydl_opts(tmp_dir: str, fmt: str, quality: str = "best", remove_non_music: bool = False) -> dict:
+    postprocessors = []
+    if remove_non_music:
+        # Cut intros/skits/outros that SponsorBlock users marked as
+        # non-music (only meaningful for music videos, not audio tracks).
+        postprocessors.append({"key": "SponsorBlock", "categories": ["music_offtopic"], "when": "after_filter"})
+    postprocessors.append(
+        {"key": "FFmpegExtractAudio", "preferredcodec": fmt, "preferredquality": "0" if quality == "best" else quality}
+    )
+    if remove_non_music:
+        postprocessors.append({"key": "ModifyChapters", "remove_sponsor_segments": ["music_offtopic"]})
     opts = {
         "format": _FORMAT_SELECTOR[fmt],
         "outtmpl": os.path.join(tmp_dir, "%(id)s.%(ext)s"),
-        "postprocessors": [
-            {"key": "FFmpegExtractAudio", "preferredcodec": fmt, "preferredquality": "0"}
-        ],
+        "postprocessors": postprocessors,
         "noplaylist": True,
         "quiet": True,
         "no_warnings": False,
@@ -96,11 +107,20 @@ def _ydl_opts(tmp_dir: str, fmt: str) -> dict:
     return opts
 
 
-def download_audio(video_id: str, out_dir: str, filename_stem: str, fmt: str = "mp3") -> str:
+def download_audio(
+    video_id: str,
+    out_dir: str,
+    filename_stem: str,
+    fmt: str = "mp3",
+    quality: str = "best",
+    remove_non_music: bool = False,
+) -> str:
     """Download `video_id` as `<out_dir>/<filename_stem>.<fmt>`; returns the path.
     Raises DownloadError with a human-readable reason on failure."""
     if fmt not in FORMATS:
         raise ValueError(f"Unsupported format: {fmt}")
+    if quality not in QUALITIES:
+        raise ValueError(f"Unsupported quality: {quality}")
 
     os.makedirs(out_dir, exist_ok=True)
     final_path = os.path.join(out_dir, f"{filename_stem}.{fmt}")
@@ -109,9 +129,21 @@ def download_audio(video_id: str, out_dir: str, filename_stem: str, fmt: str = "
     # output-template parser.
     tmp_dir = tempfile.mkdtemp(prefix=".melograb-", dir=out_dir)
     try:
+        url = f"https://www.youtube.com/watch?v={video_id}"
         try:
-            with yt_dlp.YoutubeDL(_ydl_opts(tmp_dir, fmt)) as ydl:
-                ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
+            try:
+                with yt_dlp.YoutubeDL(_ydl_opts(tmp_dir, fmt, quality, remove_non_music)) as ydl:
+                    ydl.download([url])
+            except yt_dlp.utils.DownloadError as e:
+                # SponsorBlock is a nice-to-have; its API being down mustn't
+                # cost us the track.
+                if not (remove_non_music and "sponsorblock" in str(e).lower()):
+                    raise
+                log.warning("SponsorBlock unavailable for %s, downloading uncut: %s", video_id, e)
+                for f in os.listdir(tmp_dir):
+                    os.remove(os.path.join(tmp_dir, f))
+                with yt_dlp.YoutubeDL(_ydl_opts(tmp_dir, fmt, quality, False)) as ydl:
+                    ydl.download([url])
         except yt_dlp.utils.DownloadError as e:
             raise DownloadError(friendly_error(str(e))) from e
 

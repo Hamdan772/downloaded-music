@@ -2,20 +2,37 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Callable, Optional
 
 from . import downloader, lyrics, tag, youtube_match
+from . import template as templates
 from .track import Track, sanitize_filename
 
 log = logging.getLogger(__name__)
 
 # Errors that will hit every candidate the same way -- no point retrying.
 _FATAL_HINTS = ("ffmpeg is not installed",)
-_THUMB_SIZE_RE = re.compile(r"=w\d+-h\d+")
+
+
+@dataclass
+class Options:
+    fmt: str = "mp3"
+    template: str = templates.DEFAULT_TEMPLATE
+    fetch_lyrics: bool = True
+    quality: str = "best"
+    # Cut non-music intros/outros from music-video matches via SponsorBlock.
+    remove_non_music: bool = True
+    workers: int = 4
+
+    def validate(self) -> None:
+        if self.fmt not in downloader.FORMATS:
+            raise ValueError(f"unsupported format {self.fmt!r}")
+        if self.quality not in downloader.QUALITIES:
+            raise ValueError(f"unsupported quality {self.quality!r}")
+        templates.validate(self.template)
 
 
 @dataclass
@@ -24,45 +41,56 @@ class Result:
     path: Optional[str] = None
     error: Optional[str] = None
     status: str = "failed"  # done | skipped | duplicate | failed | cancelled
+    video_id: str = ""
+    match_title: str = ""
 
     @property
     def ok(self) -> bool:
         return self.status in ("done", "skipped", "duplicate")
 
 
-def output_path(track: Track, out_dir: str, fmt: str, group_by_album: bool) -> str:
-    dest_dir = os.path.join(out_dir, track.album_folder_name) if group_by_album else out_dir
-    return os.path.join(dest_dir, f"{track.filename_stem}.{fmt}")
+def output_path(track: Track, out_dir: str, options: Options) -> str:
+    return os.path.join(out_dir, f"{templates.render(options.template, track)}.{options.fmt}")
 
 
-def _bigger_thumbnail(url: str) -> str:
-    # YouTube Music search thumbnails are tiny (60-120px); the same URL
-    # serves any size.
-    return _THUMB_SIZE_RE.sub("=w600-h600", url)
+def _candidate_title(cand: dict) -> str:
+    artists = ", ".join(a.get("name", "") for a in cand.get("artists") or [] if a)
+    title = cand.get("title") or ""
+    return f"{artists} - {title}" if artists and title else title
 
 
-def process_one(
-    track: Track, out_dir: str, fmt: str, group_by_album: bool = True, fetch_lyrics: bool = True
-) -> Result:
+def find_candidates(track: Track, limit: int = 3) -> list[dict]:
+    """The video(s) to try for `track`: its known video, else search results."""
+    if track.video_id:
+        return [{
+            "videoId": track.video_id,
+            "resultType": "song" if track.video_type == "song" else "video",
+            "title": track.title,
+            "artists": [{"name": track.artist}] if track.artist else [],
+        }]
+    return youtube_match.rank_matches(track, limit=limit)
+
+
+def process_one(track: Track, out_dir: str, options: Options) -> Result:
     try:
-        path = output_path(track, out_dir, fmt, group_by_album)
-        if os.path.exists(path):
+        path = output_path(track, out_dir, options)
+        if os.path.exists(path) and not track.replace_existing:
             return Result(track, path, status="skipped")
 
-        candidates = youtube_match.rank_matches(track, limit=3)
+        candidates = find_candidates(track)
         if not candidates:
             return Result(track, error="no matching song found on YouTube Music")
         best = candidates[0]
 
         if not track.album and isinstance(best.get("album"), dict) and best["album"].get("name"):
             track.album = best["album"]["name"]
-            path = output_path(track, out_dir, fmt, group_by_album)
-            if os.path.exists(path):
+            path = output_path(track, out_dir, options)
+            if os.path.exists(path) and not track.replace_existing:
                 return Result(track, path, status="skipped")
         if not track.cover_url and best.get("thumbnails"):
-            track.cover_url = _bigger_thumbnail(best["thumbnails"][-1]["url"])
+            track.cover_url = youtube_match.best_thumbnail(best["thumbnails"])
 
-        if fetch_lyrics:
+        if options.fetch_lyrics:
             try:
                 track.lyrics_lrc, track.lyrics_plain = lyrics.fetch_lyrics(track)
             except Exception:  # noqa: BLE001 - lyrics are best-effort
@@ -70,13 +98,22 @@ def process_one(
 
         # If the best match won't download (blocked, removed, region-locked),
         # the runner-up is usually the same song from another upload.
+        dest_dir, filename = os.path.split(path)
+        stem = os.path.splitext(filename)[0]
         downloaded = None
+        used = best
         errors = []
         for cand in candidates[:2]:
             try:
                 downloaded = downloader.download_audio(
-                    cand["videoId"], os.path.dirname(path), track.filename_stem, fmt
+                    cand["videoId"],
+                    dest_dir,
+                    stem,
+                    options.fmt,
+                    quality=options.quality,
+                    remove_non_music=options.remove_non_music and cand.get("resultType") != "song",
                 )
+                used = cand
                 break
             except downloader.DownloadError as e:
                 log.warning("download of %s (%s) failed: %s", track.display_name, cand["videoId"], e)
@@ -84,14 +121,17 @@ def process_one(
                 if any(h in str(e) for h in _FATAL_HINTS):
                     break
         if downloaded is None:
-            return Result(track, error=errors[0] if errors else "download failed")
-        path = downloaded
+            return Result(track, error=errors[0] if errors else "download failed", video_id=best["videoId"],
+                          match_title=_candidate_title(best))
 
+        # Remember the video so the GUI can link to it (and re-runs reuse it).
+        track.video_id = used["videoId"]
+        track.video_type = "song" if used.get("resultType") == "song" else "video"
         try:
-            tag.tag_file(path, track)
+            tag.tag_file(downloaded, track)
         except Exception:  # noqa: BLE001 - an untagged file still beats no file
-            log.exception("tagging failed for %s", path)
-        return Result(track, path, status="done")
+            log.exception("tagging failed for %s", downloaded)
+        return Result(track, downloaded, status="done", video_id=used["videoId"], match_title=_candidate_title(used))
     except Exception as e:  # noqa: BLE001 - surface all failures per-track
         log.exception("processing %s failed", track.display_name)
         return Result(track, error=downloader.friendly_error(str(e)) or type(e).__name__)
@@ -100,16 +140,15 @@ def process_one(
 def run(
     tracks: list[Track],
     out_dir: str,
-    fmt: str = "mp3",
-    workers: int = 4,
-    group_by_album: bool = True,
-    fetch_lyrics: bool = True,
+    options: Optional[Options] = None,
     on_start: Optional[Callable[[int], None]] = None,
     on_result: Optional[Callable[[int, Result], None]] = None,
     cancel: Optional[threading.Event] = None,
 ) -> list[Result]:
     """Process every track; returns one Result per track, in input order.
     `on_start(i)` / `on_result(i, result)` are called from worker threads."""
+    options = options or Options()
+    options.validate()
     os.makedirs(out_dir, exist_ok=True)
     results: list[Optional[Result]] = [None] * len(tracks)
 
@@ -117,7 +156,7 @@ def run(
     first_seen: dict = {}
     todo = []
     for i, t in enumerate(tracks):
-        key = os.path.normcase(output_path(t, out_dir, fmt, group_by_album))
+        key = os.path.normcase(output_path(t, out_dir, options))
         if key in first_seen:
             results[i] = Result(t, error=None, status="duplicate")
         else:
@@ -128,20 +167,21 @@ def run(
         if r and on_result:
             on_result(i, r)
 
+    if cancel is None:
+        cancel = threading.Event()
+
     def work(i: int) -> None:
         if cancel.is_set():
             result = Result(tracks[i], error="cancelled", status="cancelled")
         else:
             if on_start:
                 on_start(i)
-            result = process_one(tracks[i], out_dir, fmt, group_by_album, fetch_lyrics)
+            result = process_one(tracks[i], out_dir, options)
         results[i] = result
         if on_result:
             on_result(i, result)
 
-    if cancel is None:
-        cancel = threading.Event()
-    with ThreadPoolExecutor(max_workers=max(1, workers), thread_name_prefix="download") as pool:
+    with ThreadPoolExecutor(max_workers=max(1, options.workers), thread_name_prefix="download") as pool:
         try:
             list(pool.map(work, todo))
         except KeyboardInterrupt:
@@ -150,6 +190,24 @@ def run(
             raise
 
     return results  # type: ignore[return-value]
+
+
+def preview(tracks: list[Track], workers: int = 4) -> list[Optional[dict]]:
+    """Best candidate (or None) per track, without downloading -- for
+    checking matches before committing to a big download."""
+
+    def best(track: Track) -> Optional[dict]:
+        try:
+            cands = find_candidates(track, limit=1)
+        except Exception as e:  # noqa: BLE001
+            log.warning("matching %s failed: %s", track.display_name, e)
+            return None
+        if not cands:
+            return None
+        return dict(cands[0], display=_candidate_title(cands[0]))
+
+    with ThreadPoolExecutor(max_workers=max(1, workers), thread_name_prefix="match") as pool:
+        return list(pool.map(best, tracks))
 
 
 def write_m3u(results: list[Result], out_dir: str, name: str) -> Optional[str]:

@@ -98,7 +98,7 @@ def _track_text(track: Track) -> str:
 
 
 def _tag_mp3(path: str, track: Track) -> None:
-    from mutagen.id3 import APIC, ID3, SYLT, TALB, TDRC, TIT2, TPE1, TPE2, TRCK, TSRC, USLT
+    from mutagen.id3 import APIC, COMM, ID3, SYLT, TALB, TDRC, TIT2, TPE1, TPE2, TRCK, TSRC, TXXX, USLT
 
     tags = ID3()  # start clean -- don't keep whatever the encoder wrote
     tags.add(TIT2(encoding=3, text=track.title))
@@ -114,6 +114,10 @@ def _tag_mp3(path: str, track: Track) -> None:
         tags.add(TDRC(encoding=3, text=track.release_date))
     if track.isrc:
         tags.add(TSRC(encoding=3, text=track.isrc))
+    if track.youtube_url:
+        tags.add(COMM(encoding=3, lang="eng", desc="", text=f"Source: {track.youtube_url}"))
+    if track.explicit:
+        tags.add(TXXX(encoding=3, desc="ITUNESADVISORY", text="1"))
 
     cover = _cover(track)
     if cover:
@@ -148,6 +152,10 @@ def _tag_m4a(path: str, track: Track) -> None:
         audio["trkn"] = [(track.track_number, track.total_tracks or 0)]
     if track.release_date:
         audio["\xa9day"] = [track.release_date]
+    if track.youtube_url:
+        audio["\xa9cmt"] = [f"Source: {track.youtube_url}"]
+    if track.explicit:
+        audio["rtng"] = [1]
 
     cover = _cover(track)
     if cover:
@@ -183,6 +191,10 @@ def _tag_opus(path: str, track: Track) -> None:
         audio["date"] = track.release_date
     if track.isrc:
         audio["isrc"] = track.isrc
+    if track.youtube_url:
+        audio["comment"] = f"Source: {track.youtube_url}"
+    if track.explicit:
+        audio["itunesadvisory"] = "1"
 
     cover = _cover(track)
     if cover:
@@ -199,3 +211,72 @@ def _tag_opus(path: str, track: Track) -> None:
         audio["lyrics"] = lyrics_text
 
     audio.save()
+
+
+# ---------- lyrics for files that already exist (keeps every other tag) ----------
+
+
+def has_lyrics(path: str) -> bool:
+    ext = os.path.splitext(path)[1].lower()
+    try:
+        if ext == ".mp3":
+            from mutagen.id3 import ID3, ID3NoHeaderError
+
+            try:
+                tags = ID3(path)
+            except ID3NoHeaderError:
+                return False
+            return bool(tags.getall("USLT") or tags.getall("SYLT"))
+        if ext == ".m4a":
+            from mutagen.mp4 import MP4
+
+            return bool((MP4(path).tags or {}).get("\xa9lyr"))
+        from mutagen import File
+
+        audio = File(path)
+        return bool(audio and audio.tags and (audio.tags.get("lyrics") or audio.tags.get("unsyncedlyrics")))
+    except Exception:  # noqa: BLE001 - unreadable file: treat as "no lyrics"
+        return False
+
+
+def embed_lyrics(path: str, synced: str, plain: str) -> None:
+    """Add lyrics to an existing file without touching its other tags, and
+    write a .lrc sidecar when they're synced."""
+    text = synced or plain
+    if not text:
+        return
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".mp3":
+        from mutagen.id3 import ID3, SYLT, USLT, ID3NoHeaderError
+
+        try:
+            tags = ID3(path)
+        except ID3NoHeaderError:
+            tags = ID3()
+        tags.delall("USLT")
+        tags.delall("SYLT")
+        tags.add(USLT(encoding=3, lang="eng", desc="", text=text))
+        parsed = _parse_lrc(synced) if synced else []
+        if parsed:
+            tags.add(SYLT(encoding=3, lang="eng", format=2, type=1, desc="", text=parsed))
+        tags.save(path, v2_version=tags.version[1] if tags.version[1] in (3, 4) else 3)
+    elif ext == ".m4a":
+        from mutagen.mp4 import MP4
+
+        audio = MP4(path)
+        if audio.tags is None:
+            audio.add_tags()
+        audio["\xa9lyr"] = [text]
+        audio.save()
+    else:
+        from mutagen import File
+
+        audio = File(path)
+        if audio is None:
+            raise ValueError(f"unsupported file: {path}")
+        if audio.tags is None:
+            audio.add_tags()
+        audio.tags["lyrics"] = text
+        audio.save()
+    if synced:
+        _write_lrc_sidecar(path, synced)

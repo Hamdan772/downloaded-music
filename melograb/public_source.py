@@ -13,7 +13,6 @@ import logging
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
 from typing import Callable, Optional
 from urllib.parse import urlparse
 
@@ -21,7 +20,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from .track import Track
+from .track import Collection, Track
 
 log = logging.getLogger(__name__)
 
@@ -66,19 +65,39 @@ def _http() -> requests.Session:
         return _session
 
 
-@dataclass
-class Collection:
-    kind: str  # "playlist" or "album"
-    name: str
-    cover_url: str = ""
-    tracks: list = field(default_factory=list)
+KINDS = ("playlist", "album", "track", "artist")
+_SHORT_LINK_HOSTS = ("spotify.link", "spotify.app.link")
+_LINK_IN_PAGE_RE = re.compile(r"open\.spotify\.com/(playlist|album|track|artist)/([A-Za-z0-9]{22})")
+
+
+def is_spotify_link(text: str) -> bool:
+    text = text.strip().lower()
+    if text.startswith("spotify:"):
+        return True
+    host = urlparse(text if "://" in text else "https://" + text).netloc
+    return host in ("open.spotify.com", "play.spotify.com", *_SHORT_LINK_HOSTS)
+
+
+def resolve_short_link(url: str, timeout: int = 15) -> str:
+    """spotify.link/... share links (from the mobile app) -> open.spotify.com URL.
+    They redirect through an app-link page, so look at both where we ended
+    up and the page body."""
+    try:
+        resp = _http().get(url if "://" in url else "https://" + url, timeout=timeout)
+    except requests.RequestException as e:
+        raise ValueError(f"Couldn't open the share link: {e}") from e
+    for text in (resp.url, resp.text):
+        m = _LINK_IN_PAGE_RE.search(text or "")
+        if m:
+            return f"https://open.spotify.com/{m.group(1)}/{m.group(2)}"
+    raise ValueError(f"Couldn't find a Spotify playlist/album/track behind {url}")
 
 
 def parse_spotify_url(url: str) -> tuple[str, str]:
     text = url.strip()
     if text.startswith("spotify:"):
         parts = text.split(":")
-        if len(parts) == 3 and parts[1] in ("playlist", "album") and _ID_RE.match(parts[2]):
+        if len(parts) == 3 and parts[1] in KINDS and _ID_RE.match(parts[2]):
             return parts[1], parts[2]
         raise ValueError(f"Not a recognizable Spotify URI: {url}")
 
@@ -92,8 +111,8 @@ def parse_spotify_url(url: str) -> tuple[str, str]:
         parts = parts[1:]
     if parts and parts[0].lower() == "embed":
         parts = parts[1:]
-    if len(parts) < 2 or parts[0].lower() not in ("playlist", "album"):
-        raise ValueError(f"Only playlist/album links are supported: {url}")
+    if len(parts) < 2 or parts[0].lower() not in KINDS:
+        raise ValueError(f"Only playlist, album, track and artist links are supported: {url}")
     kind, item_id = parts[0].lower(), parts[1]
     if not _ID_RE.match(item_id):
         raise ValueError(f"Could not find a valid ID in: {url}")
@@ -158,21 +177,24 @@ def _artist_text(entity: dict) -> str:
 def fetch_collection(
     url: str, progress: Optional[Callable[[int, int], None]] = None
 ) -> Collection:
-    """Fetch a public playlist/album. For playlists, each track is enriched
-    with its real album, track number and cover. `progress(done, total)` is
-    called during enrichment."""
+    """Fetch a public playlist/album/track/artist. Playlist and artist tracks
+    are enriched with their real album, track number and cover.
+    `progress(done, total)` is called during enrichment."""
+    if urlparse(url.strip() if "://" in url else "https://" + url.strip()).netloc.lower() in _SHORT_LINK_HOSTS:
+        url = resolve_short_link(url)
     kind, item_id = parse_spotify_url(url)
     entity = _get_entity(kind, item_id)
+    if kind == "track":
+        return _single_track(entity, item_id)
 
     items = entity.get("trackList") or []
     name = entity.get("name") or entity.get("title") or ""
     cover = _extract_cover(entity)
-    album_artist = _artist_text(entity) if kind == "album" else ""
-    release_date = ""
-    if kind == "album":
-        rd = entity.get("releaseDate")
-        release_date = (rd.get("isoString") if isinstance(rd, dict) else rd) or ""
-        release_date = str(release_date)[:10]
+    is_album = kind == "album"
+    album_artist = _artist_text(entity) if is_album else ""
+    release_date = _release_date(entity) if is_album else ""
+    if kind == "artist":
+        name = f"{name} - Top Tracks" if name else "Top Tracks"
 
     tracks = []
     for i, item in enumerate(items, start=1):
@@ -184,29 +206,56 @@ def fetch_collection(
             Track(
                 title=title,
                 artist=(item.get("subtitle") or "").strip(),
-                album=name if kind == "album" else "",
+                album=name if is_album else "",
                 album_artist=album_artist,
-                track_number=i if kind == "album" else 0,
-                total_tracks=len(items) if kind == "album" else 0,
+                track_number=i if is_album else 0,
+                total_tracks=len(items) if is_album else 0,
                 release_date=release_date,
                 position=i,
                 duration_ms=item.get("duration") or 0,
                 # A playlist's own cover is only a last-resort fallback for its
                 # tracks; enrichment fills in each track's real album cover.
-                cover_url=cover if kind == "album" else "",
+                cover_url=cover if is_album else "",
                 spotify_id=uri.rsplit(":", 1)[-1] if uri else "",
+                explicit=bool(item.get("isExplicit")),
+                playlist=name,
             )
         )
     if not tracks:
         raise ValueError("No tracks found -- the playlist may be empty or private.")
 
-    if kind == "playlist":
+    if not is_album:
         _enrich_track_albums(tracks, progress=progress)
         for t in tracks:
             if not t.cover_url:
                 t.cover_url = cover
 
     return Collection(kind=kind, name=name, cover_url=cover, tracks=tracks)
+
+
+def _release_date(entity: dict) -> str:
+    rd = entity.get("releaseDate")
+    value = (rd.get("isoString") if isinstance(rd, dict) else rd) or ""
+    return str(value)[:10]
+
+
+def _single_track(entity: dict, track_id: str) -> Collection:
+    title = (entity.get("name") or entity.get("title") or "").strip()
+    if not title:
+        raise ValueError("Spotify's embed page returned no track data.")
+    track = Track(
+        title=title,
+        artist=_artist_text(entity),
+        release_date=_release_date(entity),
+        position=1,
+        duration_ms=entity.get("duration") or 0,
+        cover_url=_extract_cover(entity),
+        spotify_id=track_id,
+        explicit=bool(entity.get("isExplicit")),
+    )
+    _enrich_one(track)
+    track.playlist = track.album or track.display_name
+    return Collection(kind="track", name=track.display_name, cover_url=track.cover_url, tracks=[track])
 
 
 def fetch_playlist(url: str) -> tuple[str, list[Track]]:
@@ -239,13 +288,12 @@ def _album_info(album_id: str, timeout: int = 15) -> dict:
             return _album_cache[album_id]
     try:
         entity = _get_entity("album", album_id, timeout=timeout)
-        rd = entity.get("releaseDate")
         info = {
             "name": entity.get("name") or entity.get("title") or "",
             "cover": _extract_cover(entity),
             "artist": _artist_text(entity),
             "total": len(entity.get("trackList") or []),
-            "date": str((rd.get("isoString") if isinstance(rd, dict) else rd) or "")[:10],
+            "date": _release_date(entity),
         }
     except Exception as e:  # noqa: BLE001 - enrichment is best-effort
         log.info("album %s lookup failed: %s", album_id, e)
@@ -279,6 +327,9 @@ def _enrich_one(track: Track, timeout: int = 15) -> None:
         track.release_date = info.get("date") or track.release_date
     else:
         log.info("track page %s had no album link", track.spotify_id)
+
+    if not track.artist:
+        track.artist = meta.get("music:musician_description", "").strip()
 
     num = meta.get("music:album:track", "")
     if num.isdigit():

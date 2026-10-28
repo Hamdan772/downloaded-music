@@ -144,6 +144,13 @@ STATUS_LABELS = {
 }
 CHECKED, UNCHECKED = "☑", "☐"
 CUSTOM_LAYOUT = "Custom"
+# Lyrics menu: mode -> label (modes: tag.LYRICS_MODES)
+_LYRICS_LABELS = {
+    "synced": "Timestamped, in song",
+    "synced+lrc": "Timestamped + .lrc",
+    "plain": "Plain text",
+    "off": "Off",
+}
 NO_BROWSER = "None"
 SAMPLE_TRACK = Track(
     title="Husk", artist="Men I Trust", album="Oncle Jazz", track_number=7, release_date="2019-11-08",
@@ -434,19 +441,16 @@ class MelograbApp(tk.Tk):
         # Options
         opts = ttk.Frame(outer)
         opts.pack(fill="x", pady=(10, 0))
-        self.lyrics_var = tk.BooleanVar(value=s.get("fetch_lyrics", True))
-        ttk.Checkbutton(opts, text="Fetch synced lyrics", variable=self.lyrics_var).pack(side="left")
+        self.album_lookup_var = tk.BooleanVar(value=s.get("album_lookup", True))
+        ttk.Checkbutton(opts, text="Official album cover & info (Apple Music)", variable=self.album_lookup_var).pack(
+            side="left"
+        )
         self.sponsorblock_var = tk.BooleanVar(value=s.get("remove_non_music", True))
         ttk.Checkbutton(opts, text="Cut non-music intros/outros", variable=self.sponsorblock_var).pack(
             side="left", padx=(16, 0)
         )
         self.m3u_var = tk.BooleanVar(value=s.get("write_playlist", True))
         ttk.Checkbutton(opts, text="Write .m3u8 playlist", variable=self.m3u_var).pack(side="left", padx=(16, 0))
-        browser = s.get("cookies_browser", "")
-        self.browser_var = tk.StringVar(value=browser.title() if browser in downloader.BROWSERS else NO_BROWSER)
-        browsers = [NO_BROWSER, *(b.title() for b in downloader.BROWSERS)]
-        ttk.Combobox(opts, textvariable=self.browser_var, values=browsers, width=9, state="readonly").pack(side="right")
-        ttk.Label(opts, text="YouTube sign-in", style="Sub.TLabel").pack(side="right", padx=(0, 6))
 
         opts2 = ttk.Frame(outer)
         opts2.pack(fill="x", pady=(10, 0))
@@ -460,13 +464,29 @@ class MelograbApp(tk.Tk):
         self.quality_var = tk.StringVar(value=quality if quality in downloader.QUALITIES else "best")
         ttk.Combobox(opts2, textvariable=self.quality_var, values=list(downloader.QUALITIES), width=5,
                      state="readonly").pack(side="left", padx=(6, 14))
-        ttk.Label(opts2, text="Workers", style="Sub.TLabel").pack(side="left")
-        self.workers_var = tk.StringVar(value=str(s.get("workers", 4)))
-        ttk.Spinbox(opts2, from_=1, to=10, textvariable=self.workers_var, width=3).pack(side="left", padx=(6, 14))
-        ttk.Label(opts2, text="Output", style="Sub.TLabel").pack(side="left")
+        ttk.Label(opts2, text="Lyrics", style="Sub.TLabel").pack(side="left")
+        # Settings from 0.4 had an on/off "fetch lyrics" toggle.
+        lyrics = s.get("lyrics") or ("synced" if s.get("fetch_lyrics", True) else "off")
+        self.lyrics_var = tk.StringVar(value=_LYRICS_LABELS.get(lyrics, _LYRICS_LABELS["synced"]))
+        ttk.Combobox(opts2, textvariable=self.lyrics_var, values=list(_LYRICS_LABELS.values()), width=17,
+                     state="readonly").pack(side="left", padx=(6, 14))
+        browser = s.get("cookies_browser", "")
+        self.browser_var = tk.StringVar(value=browser.title() if browser in downloader.BROWSERS else NO_BROWSER)
+        browsers = [NO_BROWSER, *(b.title() for b in downloader.BROWSERS)]
+        ttk.Combobox(opts2, textvariable=self.browser_var, values=browsers, width=9, state="readonly").pack(
+            side="right"
+        )
+        ttk.Label(opts2, text="YouTube sign-in", style="Sub.TLabel").pack(side="right", padx=(0, 6))
+
+        out_row = ttk.Frame(outer)
+        out_row.pack(fill="x", pady=(10, 0))
+        ttk.Label(out_row, text="Output", style="Sub.TLabel").pack(side="left")
         self.output_var = tk.StringVar(value=s.get("output_dir") or DEFAULT_OUTPUT)
-        ttk.Entry(opts2, textvariable=self.output_var).pack(side="left", fill="x", expand=True, padx=(6, 4))
-        ttk.Button(opts2, text="Browse", style="Ghost.TButton", command=self.on_browse_output).pack(side="left")
+        ttk.Entry(out_row, textvariable=self.output_var).pack(side="left", fill="x", expand=True, padx=(6, 4))
+        ttk.Button(out_row, text="Browse", style="Ghost.TButton", command=self.on_browse_output).pack(side="left")
+        self.workers_var = tk.StringVar(value=str(s.get("workers", 4)))
+        ttk.Spinbox(out_row, from_=1, to=10, textvariable=self.workers_var, width=3).pack(side="right")
+        ttk.Label(out_row, text="Workers", style="Sub.TLabel").pack(side="right", padx=(14, 6))
 
         opts3 = ttk.Frame(outer)
         opts3.pack(fill="x", pady=(10, 0))
@@ -621,12 +641,17 @@ class MelograbApp(tk.Tk):
         return pipeline.Options(
             fmt=self.format_var.get(),
             template=self.template_var.get().strip(),
-            fetch_lyrics=self.lyrics_var.get(),
+            lyrics=self._lyrics_mode(),
+            album_lookup=self.album_lookup_var.get(),
             quality=self.quality_var.get(),
             remove_non_music=self.sponsorblock_var.get(),
             workers=self._workers(),
             cookies_browser=self._browser(),
         )
+
+    def _lyrics_mode(self) -> str:
+        label = self.lyrics_var.get()
+        return next((mode for mode, text in _LYRICS_LABELS.items() if text == label), "synced")
 
     def _browser(self) -> str:
         choice = self.browser_var.get().lower()
@@ -639,13 +664,15 @@ class MelograbApp(tk.Tk):
             quality=self.quality_var.get(),
             workers=self._workers(),
             template=self.template_var.get().strip() or templates.DEFAULT_TEMPLATE,
-            fetch_lyrics=self.lyrics_var.get(),
+            lyrics=self._lyrics_mode(),
+            album_lookup=self.album_lookup_var.get(),
             remove_non_music=self.sponsorblock_var.get(),
             write_playlist=self.m3u_var.get(),
             theme=self.theme_var.get(),
             cookies_browser=self._browser(),
         )
         self.settings.pop("group_by_album", None)
+        self.settings.pop("fetch_lyrics", None)
         _save_settings(self.settings)
 
     def _row_tags(self, idx: int, status: str = "") -> tuple:
@@ -1146,7 +1173,7 @@ class MelograbApp(tk.Tk):
                 summary += f" (most common: {reason})" if count > 1 else f" ({reason})"
             self.detail_label.configure(style="Detail.TLabel")
             if any("bot verification" in (r.error or "") for r in failed) and not self._browser():
-                self.detail_var.set("YouTube wants proof you're not a bot: set “YouTube sign-in” (above Format) "
+                self.detail_var.set("YouTube wants proof you're not a bot: set “YouTube sign-in” (next to Lyrics) "
                                     "to the browser you watch YouTube in, then Retry Failed.")
             else:
                 self.detail_var.set("Click a red row to see why · right-click it to pick a different YouTube link.")

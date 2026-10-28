@@ -62,8 +62,9 @@ melograb never touches Spotify's audio or DRM: Spotify (or your CSV) only tells 
 - Click a song to see what it matched; right-click to swap in a different YouTube link
 
 **A library that looks right**
-- Cover art, album, album artist, track *x of y*, year and an explicit flag on every file
-- Synced lyrics from [lrclib.net](https://lrclib.net), embedded *and* saved as `.lrc` (plain lyrics when there's no synced version)
+- The **original album cover** — from Spotify, or looked up on Apple Music in high resolution (1200×1200) when Spotify doesn't have it, never the playlist's cover (a square-cropped video frame is only the last resort)
+- Everything in the file's **metadata**: title, artist, album, album artist, track and disc *x of y*, genre, year and an explicit flag, so Apple Music, Finder, iPhone and every other player show it properly
+- **Timestamped lyrics inside the song** from [lrclib.net](https://lrclib.net) that scroll along in players that support synced lyrics — or plain text, a separate `.lrc` file, or none
 - Your choice of [file layout](#file-layout-templates), MP3 / M4A / Opus and quality, plus an `.m3u8` playlist in the original order
 - Non-music intros and outros cut from music videos using [SponsorBlock](https://sponsor.ajay.app)
 
@@ -110,7 +111,8 @@ Then `python -m melograb.gui` for the app or `python -m melograb --help` for the
 - **Check matches.** Click a row to see what it matched on YouTube, or why it failed.
 - **Fix a wrong match.** Right-click → *Use a Different YouTube Link…*, paste the right one, and it's re-downloaded over the wrong file.
 - **Retry Failed** re-runs only what didn't work; re-running a playlist later fetches only new songs.
-- **YouTube sign-in** (top right of the options): which browser's YouTube login to use if YouTube asks for its bot check.
+- **Official album cover & info** fills in the real album art and details from Apple Music when the source doesn't have them. **Lyrics** chooses timestamped lyrics inside the song, plus a `.lrc` file, plain text (best for Apple's Music app, which doesn't scroll lyrics from files), or none.
+- **YouTube sign-in** (right of Lyrics): which browser's YouTube login to use if YouTube asks for its bot check.
 - **Tools ›** *Add Lyrics to Existing Folder…*, *Update yt-dlp*, *Run Diagnostics…*, *Show Log*. **Appearance ›** light, dark or match system.
 
 Your folder, format, layout and options are remembered.
@@ -136,9 +138,11 @@ python -m melograb --add-lyrics ~/Music/Library
 | `-q best\|320\|256\|192\|128` | Quality when converting (default `best`) |
 | `-t TEMPLATE` | [File layout](#file-layout-templates); `--no-album-folders` for a flat folder |
 | `-w N` | Songs downloaded at once (default 4) |
+| `--lyrics synced\|synced+lrc\|plain\|off` | Timestamped lyrics in the song (default), plus a `.lrc` file, untimed text, or none |
+| `--no-album-lookup` | Don't fill in missing covers/album info from Apple Music |
 | `--cookies-from-browser NAME` | Use this browser's YouTube login (`safari`, `chrome`, `firefox`, `brave`, `edge`, `arc`, …) |
 | `--dry-run` | Show each song's match; download nothing |
-| `--no-lyrics` · `--no-sponsorblock` · `--no-playlist-file` | Turn off lyrics, intro/outro cutting, or the `.m3u8` |
+| `--no-sponsorblock` · `--no-playlist-file` | Turn off intro/outro cutting or the `.m3u8` |
 | `--add-lyrics DIR` | Add lyrics to every song in `DIR` (`--overwrite-lyrics` to replace) |
 | `--self-test [--online]` | Check everything works (optionally with a real download) |
 
@@ -182,9 +186,15 @@ Right-click it → *Use a Different YouTube Link…* and paste the right one. In
 </details>
 
 <details>
-<summary><b>The Album column is empty for some songs</b></summary>
+<summary><b>The Album column is empty, or a song has the wrong cover</b></summary>
 
-Spotify rate-limits the per-song lookups on big playlists. Those songs fall back to the album name YouTube Music reports.
+Spotify sometimes rate-limits its per-song lookups on big playlists. With **Official album cover & info** on (the default), melograb then looks the song up on Apple Music for its album, cover and details, and falls back to YouTube Music's album name if that fails too.
+</details>
+
+<details>
+<summary><b>Do the lyrics scroll along with the song?</b></summary>
+
+melograb embeds timestamped lyrics (an ID3 `SYLT` frame plus the LRC text) inside each song. Players with synced-lyrics support — for example Poweramp, MusicBee, foobar2000, Plex, Navidrome and Jellyfin — scroll them in time. Apple's Music app shows lyrics from files as plain text, so pick **Lyrics › Plain text** if that's your player.
 </details>
 
 <details>
@@ -201,6 +211,7 @@ melograb has no accounts, analytics or servers of its own. It talks to:
 | --- | --- |
 | Spotify (public, logged-out pages) | Tracklists, albums, covers |
 | YouTube / YouTube Music | Finding and downloading audio |
+| Apple's public iTunes Search API | Official album covers and album info (can be turned off) |
 | [lrclib.net](https://lrclib.net) | Lyrics |
 | [SponsorBlock](https://sponsor.ajay.app) | Where music videos' non-music parts are |
 | PyPI and GitHub | Checking for yt-dlp and melograb updates |

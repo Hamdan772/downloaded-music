@@ -14,22 +14,48 @@ from .track import Track
 log = logging.getLogger(__name__)
 
 
+# How lyrics go into files:
+#   synced      timestamped lyrics inside the song (ID3 SYLT + the LRC text)
+#   synced+lrc  the same, plus a .lrc file next to the song
+#   plain       untimed text only (e.g. for Apple Music, which shows raw LRC)
+#   off         no lyrics
+LYRICS_MODES = ("synced", "synced+lrc", "plain", "off")
+
+
 @functools.lru_cache(maxsize=64)
 def _fetch_cover(url: str) -> tuple[bytes, str]:
     """(image bytes, mime) -- cached, since every track of an album shares
-    one cover. Anything that isn't JPEG/PNG (e.g. WebP thumbnails) is
-    converted to JPEG, the format every player understands."""
+    one cover. Square JPEG/PNG artwork is used as-is; anything else (video
+    thumbnails, WebP) becomes a square JPEG, which every player shows."""
     resp = requests.get(url, timeout=15)
     resp.raise_for_status()
-    data = resp.content
-    if data.startswith(b"\xff\xd8"):
-        return data, "image/jpeg"
-    if data.startswith(b"\x89PNG"):
-        return data, "image/png"
+    return square_cover(resp.content)
+
+
+def square_cover(data: bytes) -> tuple[bytes, str]:
     from PIL import Image
 
+    img = Image.open(io.BytesIO(data))
+    w, h = img.size
+    is_square = abs(w - h) <= max(w, h) * 0.02
+    if is_square and data.startswith(b"\xff\xd8"):
+        return data, "image/jpeg"
+    if is_square and data.startswith(b"\x89PNG"):
+        return data, "image/png"
+    img = img.convert("RGB")
+    if not is_square:
+        # Video thumbnails are letterboxed: trim near-black bars, then take
+        # the centre square.
+        mask = img.convert("L").point(lambda v: 255 if v > 24 else 0)
+        box = mask.getbbox()
+        if box and (box[2] - box[0]) * (box[3] - box[1]) > 0.3 * w * h:
+            img = img.crop(box)
+            w, h = img.size
+        side = min(w, h)
+        left, top = (w - side) // 2, (h - side) // 2
+        img = img.crop((left, top, left + side, top + side))
     buf = io.BytesIO()
-    Image.open(io.BytesIO(data)).convert("RGB").save(buf, "JPEG", quality=92)
+    img.save(buf, "JPEG", quality=92)
     return buf.getvalue(), "image/jpeg"
 
 
@@ -43,21 +69,39 @@ def _cover(track: Track):
         return None
 
 
-def tag_file(path: str, track: Track) -> None:
+def tag_file(path: str, track: Track, lyrics: str = "synced") -> None:
+    """Write all metadata, cover art and (per `lyrics`, see LYRICS_MODES)
+    lyrics into the file."""
+    if lyrics not in LYRICS_MODES:
+        raise ValueError(f"unknown lyrics mode {lyrics!r}")
     ext = os.path.splitext(path)[1].lower()
     if ext == ".mp3":
-        _tag_mp3(path, track)
+        _tag_mp3(path, track, lyrics)
     elif ext == ".m4a":
-        _tag_m4a(path, track)
+        _tag_m4a(path, track, lyrics)
     elif ext == ".opus":
-        _tag_opus(path, track)
+        _tag_opus(path, track, lyrics)
 
-    if track.lyrics_lrc:
+    if lyrics == "synced+lrc" and track.lyrics_lrc:
         _write_lrc_sidecar(path, track.lyrics_lrc)
 
 
 _LRC_LINE_RE = re.compile(r"^((?:\[\d+:\d+(?:[.:]\d+)?\])+)(.*)$")
 _LRC_TIME_RE = re.compile(r"\[(\d+):(\d+(?:[.:]\d+)?)\]")
+_LRC_META_RE = re.compile(r"^\[[a-z]+:.*\]$", re.I)
+
+
+def strip_timestamps(lrc_text: str) -> str:
+    """LRC -> plain lyrics (drops timestamps and [ar:]/[ti:] header lines)."""
+    lines = []
+    for raw in lrc_text.splitlines():
+        line = raw.strip()
+        m = _LRC_LINE_RE.match(line)
+        if m:
+            lines.append(m.group(2).strip())
+        elif not _LRC_META_RE.match(line):
+            lines.append(line)
+    return "\n".join(lines).strip()
 
 
 def _parse_lrc(lrc_text: str) -> list[tuple[str, int]]:
@@ -85,10 +129,20 @@ def _write_lrc_sidecar(audio_path: str, lrc_text: str) -> None:
         log.info("couldn't write .lrc for %s: %s", audio_path, e)
 
 
-def _lyrics_text(track: Track) -> str:
-    # The raw LRC is the convention most players/taggers rely on for
-    # "synced-ish" display even without SYLT support.
+def _lyrics_text(track: Track, mode: str) -> str:
+    if mode == "off":
+        return ""
+    if mode == "plain":
+        return track.lyrics_plain or strip_timestamps(track.lyrics_lrc)
+    # Timestamped LRC text is what most players (Poweramp, MusicBee, Plex,
+    # Navidrome, ...) read for synced lyrics, even those without SYLT.
     return track.lyrics_lrc or track.lyrics_plain
+
+
+def _disc_text(track: Track) -> str:
+    if track.disc_number and track.total_discs:
+        return f"{track.disc_number}/{track.total_discs}"
+    return str(track.disc_number)
 
 
 def _track_text(track: Track) -> str:
@@ -97,8 +151,24 @@ def _track_text(track: Track) -> str:
     return str(track.track_number)
 
 
-def _tag_mp3(path: str, track: Track) -> None:
-    from mutagen.id3 import APIC, COMM, ID3, SYLT, TALB, TDRC, TIT2, TPE1, TPE2, TRCK, TSRC, TXXX, USLT
+def _tag_mp3(path: str, track: Track, lyrics: str = "synced") -> None:
+    from mutagen.id3 import (
+        APIC,
+        COMM,
+        ID3,
+        SYLT,
+        TALB,
+        TCON,
+        TDRC,
+        TIT2,
+        TPE1,
+        TPE2,
+        TPOS,
+        TRCK,
+        TSRC,
+        TXXX,
+        USLT,
+    )
 
     tags = ID3()  # start clean -- don't keep whatever the encoder wrote
     tags.add(TIT2(encoding=3, text=track.title))
@@ -110,6 +180,10 @@ def _tag_mp3(path: str, track: Track) -> None:
         tags.add(TPE2(encoding=3, text=track.album_artist))
     if track.track_number:
         tags.add(TRCK(encoding=3, text=_track_text(track)))
+    if track.disc_number:
+        tags.add(TPOS(encoding=3, text=_disc_text(track)))
+    if track.genre:
+        tags.add(TCON(encoding=3, text=track.genre))
     if track.release_date:
         tags.add(TDRC(encoding=3, text=track.release_date))
     if track.isrc:
@@ -124,17 +198,17 @@ def _tag_mp3(path: str, track: Track) -> None:
         data, mime = cover
         tags.add(APIC(encoding=3, mime=mime, type=3, desc="Cover", data=data))
 
-    lyrics_text = _lyrics_text(track)
+    lyrics_text = _lyrics_text(track, lyrics)
     if lyrics_text:
         tags.add(USLT(encoding=3, lang="eng", desc="", text=lyrics_text))
-    synced = _parse_lrc(track.lyrics_lrc) if track.lyrics_lrc else []
+    synced = _parse_lrc(track.lyrics_lrc) if track.lyrics_lrc and lyrics.startswith("synced") else []
     if synced:
         tags.add(SYLT(encoding=3, lang="eng", format=2, type=1, desc="", text=synced))
 
     tags.save(path, v2_version=3)
 
 
-def _tag_m4a(path: str, track: Track) -> None:
+def _tag_m4a(path: str, track: Track, lyrics: str = "synced") -> None:
     from mutagen.mp4 import MP4, MP4Cover
 
     audio = MP4(path)
@@ -150,6 +224,10 @@ def _tag_m4a(path: str, track: Track) -> None:
         audio["aART"] = [track.album_artist]
     if track.track_number:
         audio["trkn"] = [(track.track_number, track.total_tracks or 0)]
+    if track.disc_number:
+        audio["disk"] = [(track.disc_number, track.total_discs or 0)]
+    if track.genre:
+        audio["\xa9gen"] = [track.genre]
     if track.release_date:
         audio["\xa9day"] = [track.release_date]
     if track.youtube_url:
@@ -163,14 +241,14 @@ def _tag_m4a(path: str, track: Track) -> None:
         fmt = MP4Cover.FORMAT_PNG if mime == "image/png" else MP4Cover.FORMAT_JPEG
         audio["covr"] = [MP4Cover(data, imageformat=fmt)]
 
-    lyrics_text = _lyrics_text(track)
+    lyrics_text = _lyrics_text(track, lyrics)
     if lyrics_text:
         audio["\xa9lyr"] = [lyrics_text]
 
     audio.save()
 
 
-def _tag_opus(path: str, track: Track) -> None:
+def _tag_opus(path: str, track: Track, lyrics: str = "synced") -> None:
     from mutagen.flac import Picture
     from mutagen.oggopus import OggOpus
 
@@ -187,6 +265,12 @@ def _tag_opus(path: str, track: Track) -> None:
         audio["tracknumber"] = str(track.track_number)
     if track.total_tracks:
         audio["tracktotal"] = str(track.total_tracks)
+    if track.disc_number:
+        audio["discnumber"] = str(track.disc_number)
+    if track.total_discs:
+        audio["disctotal"] = str(track.total_discs)
+    if track.genre:
+        audio["genre"] = track.genre
     if track.release_date:
         audio["date"] = track.release_date
     if track.isrc:
@@ -206,7 +290,7 @@ def _tag_opus(path: str, track: Track) -> None:
         pic.data = data
         audio["metadata_block_picture"] = base64.b64encode(pic.write()).decode("ascii")
 
-    lyrics_text = _lyrics_text(track)
+    lyrics_text = _lyrics_text(track, lyrics)
     if lyrics_text:
         audio["lyrics"] = lyrics_text
 

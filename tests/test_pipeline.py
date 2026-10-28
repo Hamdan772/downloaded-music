@@ -32,7 +32,7 @@ def fakes(monkeypatch):
 
     monkeypatch.setattr(youtube_match, "rank_matches", rank)
     monkeypatch.setattr(downloader, "download_audio", download)
-    monkeypatch.setattr(tag, "tag_file", lambda path, track: None)
+    monkeypatch.setattr(tag, "tag_file", lambda path, track, lyrics="synced": None)
     monkeypatch.setattr(lyrics, "fetch_lyrics", lambda track: ("[00:01.00]hi", "hi"))
     return state
 
@@ -172,3 +172,30 @@ def test_browser_sign_in_is_passed_and_bot_checks_dont_retry(tmp_path, fakes, mo
     assert r.status == "failed" and fakes["downloads"] == ["B-1"]  # second candidate would fail the same way
     with pytest.raises(ValueError):
         pipeline.Options(cookies_browser="netscape").validate()
+
+
+def test_album_lookup_fills_folder_before_download(tmp_path, fakes, monkeypatch):
+    from melograb import apple_music
+
+    def enrich(track):
+        track.album, track.genre = "Official Album", "Pop"
+        return True
+
+    monkeypatch.setattr(apple_music, "enrich", enrich)
+    (r,) = pipeline.run([Track("A", "X")], str(tmp_path))
+    assert r.path == str(tmp_path / "Official Album" / "X - A.mp3")  # not YouTube Music's album name
+
+    monkeypatch.setattr(apple_music, "enrich", lambda t: pytest.fail("lookup should be off"))
+    pipeline.run([Track("B", "Y")], str(tmp_path), pipeline.Options(album_lookup=False))
+
+
+def test_lyrics_mode_reaches_tagging(tmp_path, fakes, monkeypatch):
+    modes = []
+    monkeypatch.setattr(tag, "tag_file", lambda path, track, lyrics="synced": modes.append(lyrics))
+    fetched = []
+    monkeypatch.setattr(lyrics, "fetch_lyrics", lambda t: fetched.append(t) or ("", ""))
+    pipeline.run([Track("A", "X", album="Alb")], str(tmp_path), pipeline.Options(lyrics="plain"))
+    pipeline.run([Track("B", "X", album="Alb")], str(tmp_path), pipeline.Options(lyrics="off"))
+    assert modes == ["plain", "off"] and len(fetched) == 1
+    with pytest.raises(ValueError):
+        pipeline.Options(lyrics="loud").validate()

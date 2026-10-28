@@ -28,12 +28,19 @@ class Track:
     album_artist: str = ""
     track_number: int = 0
     total_tracks: int = 0
+    disc_number: int = 0
+    total_discs: int = 0
+    genre: str = ""
     release_date: str = ""
     # 1-based position in the source playlist/CSV -- used for ordering
     # (e.g. the .m3u8 playlist), never written as the track number.
     position: int = 0
     duration_ms: int = 0
     cover_url: str = ""
+    # True when cover_url is the release's own album artwork (Spotify album,
+    # YouTube Music album, Apple Music) rather than a playlist cover or a
+    # video thumbnail -- only then is it kept over a looked-up official cover.
+    cover_is_official: bool = False
     isrc: str = ""
     spotify_id: str = ""
     explicit: bool = False

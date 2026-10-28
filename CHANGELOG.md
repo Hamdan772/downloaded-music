@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.5.0] - 2026-10-28
+
+### Album art and metadata
+- **The original album cover, every time.** Songs no longer fall back to the playlist's cover. When Spotify can't supply a song's album, melograb looks it up on Apple Music and embeds the official artwork at 1200×1200; video thumbnails, the last resort, are trimmed and cropped square.
+- **Complete metadata in every file:** album, album artist, track and disc numbers (*x of y*), **genre**, release date and explicit flag — filled from Apple Music when the source doesn't have them, without overwriting what Spotify provided. One lookup per album keeps it quick.
+- New option **Official album cover & info (Apple Music)** (on by default; CLI `--no-album-lookup`).
+
+### Lyrics
+- **Timestamped lyrics inside the song** are now the default: ID3 `SYLT` + LRC text in MP3, LRC text in M4A and Opus.
+- New **Lyrics** menu (CLI `--lyrics`): *Timestamped, in song* · *Timestamped + .lrc* (the old behaviour) · *Plain text* (for Apple's Music app) · *Off*.
+
+### Also
+- The online self-test now checks Spotify playlist lookups and Apple Music, and lists the tags written to a real download.
+
 ## [0.4.0] - 2026-10-28
 
 The first packaged release: a self-contained Mac app, plus everything that

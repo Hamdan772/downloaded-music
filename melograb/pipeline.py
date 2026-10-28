@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from . import downloader, env, lyrics, tag, youtube_match
+from . import apple_music, downloader, env, lyrics, tag, youtube_match
 from . import template as templates
 from .track import Track, sanitize_filename
 
@@ -21,7 +21,11 @@ _FATAL_HINTS = ("ffmpeg is not installed", "bot verification", "browser's cookie
 class Options:
     fmt: str = "mp3"
     template: str = templates.DEFAULT_TEMPLATE
-    fetch_lyrics: bool = True
+    # How lyrics go into the files: see tag.LYRICS_MODES.
+    lyrics: str = "synced"
+    # Fill in the official album cover/album info from Apple Music when the
+    # source didn't provide them.
+    album_lookup: bool = True
     quality: str = "best"
     # Cut non-music intros/outros from music-video matches via SponsorBlock.
     remove_non_music: bool = True
@@ -36,6 +40,8 @@ class Options:
             raise ValueError(f"unsupported quality {self.quality!r}")
         if self.cookies_browser and self.cookies_browser not in downloader.BROWSERS:
             raise ValueError(f"unsupported browser {self.cookies_browser!r}")
+        if self.lyrics not in tag.LYRICS_MODES:
+            raise ValueError(f"unsupported lyrics mode {self.lyrics!r}")
         templates.validate(self.template)
 
 
@@ -81,6 +87,15 @@ def process_one(track: Track, out_dir: str, options: Options) -> Result:
         if os.path.exists(path) and not track.replace_existing:
             return Result(track, path, status="skipped")
 
+        if options.album_lookup:
+            try:
+                if apple_music.enrich(track):
+                    path = output_path(track, out_dir, options)
+                    if os.path.exists(path) and not track.replace_existing:
+                        return Result(track, path, status="skipped")
+            except Exception:  # noqa: BLE001 - album info is best-effort
+                log.exception("Apple Music lookup failed for %s", track.display_name)
+
         candidates = find_candidates(track)
         if not candidates:
             return Result(track, error="no matching song found on YouTube Music")
@@ -93,8 +108,9 @@ def process_one(track: Track, out_dir: str, options: Options) -> Result:
                 return Result(track, path, status="skipped")
         if not track.cover_url and best.get("thumbnails"):
             track.cover_url = youtube_match.best_thumbnail(best["thumbnails"])
+            track.cover_is_official = best.get("resultType") == "song"
 
-        if options.fetch_lyrics:
+        if options.lyrics != "off":
             try:
                 track.lyrics_lrc, track.lyrics_plain = lyrics.fetch_lyrics(track)
             except Exception:  # noqa: BLE001 - lyrics are best-effort
@@ -134,7 +150,7 @@ def process_one(track: Track, out_dir: str, options: Options) -> Result:
         track.video_id = used["videoId"]
         track.video_type = "song" if used.get("resultType") == "song" else "video"
         try:
-            tag.tag_file(downloaded, track)
+            tag.tag_file(downloaded, track, lyrics=options.lyrics)
         except Exception:  # noqa: BLE001 - an untagged file still beats no file
             log.exception("tagging failed for %s", downloaded)
         return Result(track, downloaded, status="done", video_id=used["videoId"], match_title=_candidate_title(used))

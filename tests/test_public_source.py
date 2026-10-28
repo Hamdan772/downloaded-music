@@ -104,9 +104,11 @@ def test_playlist_tracks_get_their_own_album_and_cover(monkeypatch):
     assert first.album_artist == "PinkPantheress"
     assert first.release_date == "2025-05-09"
     assert first.position == 1
+    assert first.cover_is_official
     # Un-enrichable track: no fake track number from its playlist position,
-    # playlist cover only as a fallback.
-    assert (second.album, second.track_number, second.cover_url) == ("", 0, "playlist-big")
+    # and never the playlist's cover (the album art is looked up later).
+    assert (second.album, second.track_number, second.cover_url) == ("", 0, "")
+    assert not second.cover_is_official
     assert progress[-1] == (2, 2)
 
 

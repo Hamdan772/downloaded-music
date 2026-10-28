@@ -97,6 +97,9 @@ def _track_from_item(item: dict, position: int, playlist: str, album: str = "", 
         playlist=playlist,
         video_id=item.get("videoId") or "",
         video_type=_video_type(item),
+        # Official audio tracks ("songs") carry their album's artwork; video
+        # thumbnails don't.
+        cover_is_official=_video_type(item) == "song",
         **extra,
     )
 
@@ -119,6 +122,7 @@ def _fetch_album(browse_id: str) -> Collection:
         )
         t.album = name  # album tracks report the album as a bare string or not at all
         t.cover_url = cover or t.cover_url
+        t.cover_is_official = bool(t.cover_url)
         t.artist = t.artist or album_artist
         t.video_type = "song"
         tracks.append(t)

@@ -16,8 +16,10 @@ import tempfile
 import time
 from typing import Callable, Optional
 
-# A long-lived, public album to test against (Daft Punk - Discovery).
+# Long-lived public things to test against: an album (Daft Punk -
+# Discovery) and Spotify's own "Today's Top Hits" playlist.
 ONLINE_ALBUM = "https://open.spotify.com/album/2noRn2Aes5aoNVsU6iWThc"
+ONLINE_PLAYLIST = "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"
 
 
 class _Report:
@@ -127,6 +129,8 @@ def run(online: bool = False, emit: Callable[[str], None] = print) -> bool:
     with tempfile.TemporaryDirectory(prefix="melograb-selftest-") as tmp:
         r.check("convert + tag (mp3, m4a, opus)", lambda: _convert_and_tag(tmp))
         if online:
+            r.check("online: Spotify playlist album lookups", _online_playlist, required=False)
+            r.check("online: Apple Music album info + artwork", _online_apple, required=False)
             r.check("online: fetch album + download one song", lambda: _online(tmp))
 
     ok = r.failures == 0
@@ -161,11 +165,51 @@ def _online(tmp: str) -> str:
 
     coll = sources.resolve(ONLINE_ALBUM)
     track = coll.tracks[0]
-    (result,) = pipeline.run([track], tmp, pipeline.Options(fetch_lyrics=True, workers=1))
+    (result,) = pipeline.run([track], tmp, pipeline.Options(workers=1))
     if not result.ok:
         raise RuntimeError(f"{track.display_name}: {result.error}")
     size = os.path.getsize(result.path) // 1024
-    return f"“{coll.name}” ({len(coll.tracks)} tracks) → {os.path.basename(result.path)}, {size} KB"
+    return (f"“{coll.name}” ({len(coll.tracks)} tracks) → {os.path.basename(result.path)}, {size} KB; "
+            f"tags: {_describe_tags(result.path)}")
+
+
+def _describe_tags(path: str) -> str:
+    from mutagen.id3 import ID3
+
+    tags = ID3(path)
+    parts = [f"{key}={tags[key].text[0]}" for key in ("TALB", "TPE2", "TRCK", "TCON", "TDRC") if key in tags]
+    apic = tags.getall("APIC")
+    if apic:
+        from io import BytesIO
+
+        from PIL import Image
+
+        w, h = Image.open(BytesIO(apic[0].data)).size
+        parts.append(f"cover {w}x{h}")
+    sylt = tags.getall("SYLT")
+    parts.append(f"{len(sylt[0].text)} timestamped lyric lines" if sylt else "no synced lyrics")
+    return ", ".join(parts)
+
+
+def _online_playlist() -> str:
+    from . import public_source
+
+    coll = public_source.fetch_collection(ONLINE_PLAYLIST)
+    with_album = sum(bool(t.album) for t in coll.tracks)
+    official = sum(t.cover_is_official for t in coll.tracks)
+    if not with_album:
+        raise RuntimeError(f"none of {len(coll.tracks)} tracks got their album from Spotify")
+    return f"{with_album}/{len(coll.tracks)} tracks got their album, {official} their album cover"
+
+
+def _online_apple() -> str:
+    from . import apple_music
+    from .track import Track
+
+    t = Track(title="Husk", artist="Men I Trust", duration_ms=215_000)
+    if not apple_music.enrich(t):
+        raise RuntimeError("no match for Men I Trust - Husk")
+    return f"{t.album} · {t.genre} · {t.release_date} · track {t.track_number}/{t.total_tracks} · {t.cover_url}"
 
 
 def main(argv=None) -> int:

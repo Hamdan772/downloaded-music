@@ -216,6 +216,7 @@ def fetch_collection(
                 # A playlist's own cover is only a last-resort fallback for its
                 # tracks; enrichment fills in each track's real album cover.
                 cover_url=cover if is_album else "",
+                cover_is_official=is_album and bool(cover),
                 spotify_id=uri.rsplit(":", 1)[-1] if uri else "",
                 explicit=bool(item.get("isExplicit")),
                 playlist=name,
@@ -226,9 +227,6 @@ def fetch_collection(
 
     if not is_album:
         _enrich_track_albums(tracks, progress=progress)
-        for t in tracks:
-            if not t.cover_url:
-                t.cover_url = cover
 
     return Collection(kind=kind, name=name, cover_url=cover, tracks=tracks)
 
@@ -250,6 +248,7 @@ def _single_track(entity: dict, track_id: str) -> Collection:
         position=1,
         duration_ms=entity.get("duration") or 0,
         cover_url=_extract_cover(entity),
+        cover_is_official=True,  # a track's embed shows its album's artwork
         spotify_id=track_id,
         explicit=bool(entity.get("isExplicit")),
     )
@@ -322,6 +321,7 @@ def _enrich_one(track: Track, timeout: int = 15) -> None:
             track.album = info["name"]
         if info.get("cover"):
             track.cover_url = info["cover"]
+            track.cover_is_official = True
         track.album_artist = info.get("artist") or track.album_artist
         track.total_tracks = info.get("total") or track.total_tracks
         track.release_date = info.get("date") or track.release_date

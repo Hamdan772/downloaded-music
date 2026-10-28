@@ -8,7 +8,18 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from melograb import apple_music  # noqa: E402
 from melograb.track import Track  # noqa: E402
+
+REAL_APPLE_SEARCH = apple_music._search
+
+
+@pytest.fixture(autouse=True)
+def no_apple_music_network(monkeypatch):
+    """Tests never hit the real iTunes API (tests of apple_music itself fake
+    requests.get and call REAL_APPLE_SEARCH)."""
+    monkeypatch.setattr(apple_music, "_search", lambda params, timeout=10: [])
+    apple_music._cache.clear()
 
 
 @pytest.fixture

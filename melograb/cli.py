@@ -63,7 +63,11 @@ def build_parser() -> argparse.ArgumentParser:
                      help=f"file/folder layout (default: {templates.DEFAULT_TEMPLATE!r})")
     out.add_argument("--no-album-folders", action="store_true",
                      help=f"shorthand for --template {templates.FLAT_TEMPLATE!r}")
-    out.add_argument("--no-lyrics", action="store_true", help="don't fetch lyrics")
+    out.add_argument("--lyrics", choices=("synced", "synced+lrc", "plain", "off"), default="synced",
+                     help="timestamped lyrics inside the song (default), plus a .lrc file, untimed text, or none")
+    out.add_argument("--no-lyrics", action="store_true", help="shorthand for --lyrics off")
+    out.add_argument("--no-album-lookup", action="store_true",
+                     help="don't fill in missing album covers/info from Apple Music")
     out.add_argument("--no-sponsorblock", action="store_true",
                      help="keep non-music intros/outros in music-video matches")
     out.add_argument("--no-playlist-file", action="store_true", help="don't write an .m3u8 playlist")
@@ -146,7 +150,8 @@ def main(argv=None):
     options = pipeline.Options(
         fmt=args.format,
         template=args.template or (templates.FLAT_TEMPLATE if args.no_album_folders else templates.DEFAULT_TEMPLATE),
-        fetch_lyrics=not args.no_lyrics,
+        lyrics="off" if args.no_lyrics else args.lyrics,
+        album_lookup=not args.no_album_lookup,
         quality=args.quality,
         remove_non_music=not args.no_sponsorblock,
         workers=args.workers,

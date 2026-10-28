@@ -58,7 +58,7 @@ def test_youtube_playlist_to_tagged_library(tmp_path, monkeypatch, jpeg_bytes, c
     assert str(tags["TALB"]) == "Oncle Jazz" and str(tags["TIT2"]) == "Husk"
     assert tags.getall("SYLT") and tags.getall("APIC")
     assert "music.youtube.com/watch?v=aaaaaaaaaaa" in str(tags.getall("COMM")[0])
-    assert (out / "Road Trip" / "01 Men I Trust - Husk.lrc").exists()
+    assert not (out / "Road Trip" / "01 Men I Trust - Husk.lrc").exists()  # lyrics live inside the song
     m3u = (out / "Road Trip.m3u8").read_text(encoding="utf-8").splitlines()
     assert m3u[2] == "Road Trip/01 Men I Trust - Husk.mp3" and m3u[4] == "Road Trip/02 Dijon - coogie.mp3"
     assert not [p for p in os.listdir(out / "Road Trip") if p.startswith(".melograb-")]

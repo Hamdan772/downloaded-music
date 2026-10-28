@@ -1,5 +1,7 @@
-ytmusicapi>=1.9.0
-yt-dlp>=2024.8.6
+ytmusicapi>=1.10.0
+# [default] pulls in yt-dlp-ejs, which YouTube downloads now need
+# (together with a JS runtime such as deno: `brew install deno`).
+yt-dlp[default]>=2025.11.12
 mutagen>=1.47.0
 rapidfuzz>=3.9.0
 requests>=2.32.0

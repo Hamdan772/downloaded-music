@@ -10,3 +10,6 @@ downloads/
 *.opus
 *.lrc
 .DS_Store
+*.m3u8
+*.egg-info/
+.pytest_cache/

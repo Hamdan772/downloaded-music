@@ -1,52 +1,125 @@
 from __future__ import annotations
 
+import logging
 import os
+import re
+import shutil
+import tempfile
 
 import yt_dlp
 
-_CODEC_EXT = {"mp3": "mp3", "m4a": "m4a", "opus": "opus"}
+from . import env
+
+log = logging.getLogger(__name__)
+
+FORMATS = ("mp3", "m4a", "opus")
+
+# Prefer a source stream that's already in the target codec so m4a/opus
+# don't get needlessly re-encoded.
+_FORMAT_SELECTOR = {
+    "mp3": "bestaudio/best",
+    "m4a": "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio/best",
+    "opus": "bestaudio[acodec=opus]/bestaudio/best",
+}
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_UPDATE_HINT = 'update yt-dlp (`pip install -U "yt-dlp[default]"`) and install deno (`brew install deno`)'
+_ERROR_HINTS = (
+    ("ffprobe and ffmpeg not found", "ffmpeg is not installed (macOS: `brew install ffmpeg`)"),
+    ("ffmpeg not found", "ffmpeg is not installed (macOS: `brew install ffmpeg`)"),
+    ("confirm your age", "video is age-restricted"),
+    ("sign in to confirm", f"YouTube is asking for bot verification -- {_UPDATE_HINT}, or wait and retry"),
+    ("requested format is not available", f"YouTube returned no downloadable audio -- {_UPDATE_HINT}"),
+    ("only images are available", f"YouTube returned no downloadable audio -- {_UPDATE_HINT}"),
+    ("challenge solving failed", f"couldn't solve YouTube's player challenge -- {_UPDATE_HINT}"),
+    ("http error 403", f"YouTube refused the download (403) -- {_UPDATE_HINT}"),
+    ("video unavailable", "video is unavailable"),
+    ("private video", "video is private"),
+    ("not available in your country", "video is region-blocked"),
+)
+
+
+class DownloadError(Exception):
+    pass
+
+
+def friendly_error(message: str) -> str:
+    message = _ANSI_RE.sub("", str(message)).replace("ERROR: ", "").strip()
+    lower = message.lower()
+    for needle, hint in _ERROR_HINTS:
+        if needle in lower:
+            return hint
+    return message.splitlines()[0] if message else "unknown error"
+
+
+class _YtdlpLogger:
+    """Route yt-dlp's chatter into our log file instead of stdout."""
+
+    def debug(self, msg):
+        if not msg.startswith("[debug] "):
+            log.debug(msg)
+
+    def info(self, msg):
+        log.debug(msg)
+
+    def warning(self, msg):
+        log.warning(_ANSI_RE.sub("", msg))
+
+    def error(self, msg):
+        log.error(_ANSI_RE.sub("", msg))
+
+
+def _ydl_opts(tmp_dir: str, fmt: str) -> dict:
+    opts = {
+        "format": _FORMAT_SELECTOR[fmt],
+        "outtmpl": os.path.join(tmp_dir, "%(id)s.%(ext)s"),
+        "postprocessors": [
+            {"key": "FFmpegExtractAudio", "preferredcodec": fmt, "preferredquality": "0"}
+        ],
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": False,
+        "noprogress": True,
+        "no_color": True,
+        "logger": _YtdlpLogger(),
+        "retries": 5,
+        "fragment_retries": 5,
+        "socket_timeout": 30,
+        "overwrites": True,
+    }
+    # Let yt-dlp choose its own YouTube player clients -- they change often
+    # and its defaults track what currently works. Just tell it about every
+    # JS runtime we can find (it only looks for deno by default).
+    runtimes = env.available_js_runtimes()
+    if runtimes:
+        opts["js_runtimes"] = {name: {} for name in runtimes}
+    return opts
 
 
 def download_audio(video_id: str, out_dir: str, filename_stem: str, fmt: str = "mp3") -> str:
-    if fmt not in _CODEC_EXT:
+    """Download `video_id` as `<out_dir>/<filename_stem>.<fmt>`; returns the path.
+    Raises DownloadError with a human-readable reason on failure."""
+    if fmt not in FORMATS:
         raise ValueError(f"Unsupported format: {fmt}")
 
     os.makedirs(out_dir, exist_ok=True)
-    out_template = os.path.join(out_dir, f"{filename_stem}.%(ext)s")
+    final_path = os.path.join(out_dir, f"{filename_stem}.{fmt}")
+    # Work in a private temp dir so partial downloads never land in the
+    # library and odd characters in song names never reach yt-dlp's
+    # output-template parser.
+    tmp_dir = tempfile.mkdtemp(prefix=".melograb-", dir=out_dir)
+    try:
+        try:
+            with yt_dlp.YoutubeDL(_ydl_opts(tmp_dir, fmt)) as ydl:
+                ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
+        except yt_dlp.utils.DownloadError as e:
+            raise DownloadError(friendly_error(str(e))) from e
 
-    postprocessors = [
-        {
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": fmt if fmt != "m4a" else "m4a",
-            "preferredquality": "0",
-        }
-    ]
-    if fmt == "mp3":
-        postprocessors.append({"key": "EmbedThumbnail"})
-        postprocessors.append({"key": "FFmpegMetadata"})
-
-    ydl_opts = {
-        "format": "bestaudio/best",
-        "outtmpl": out_template,
-        "quiet": True,
-        "no_warnings": True,
-        "postprocessors": postprocessors,
-        "writethumbnail": fmt == "mp3",
-        "noplaylist": True,
-        # YouTube's "web" client alone frequently 403s / needs a reload due to
-        # SABR streaming rollout; android+tv clients don't require that.
-        "extractor_args": {"youtube": {"player_client": ["android", "tv", "web"]}},
-    }
-
-    url = f"https://music.youtube.com/watch?v={video_id}"
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
-
-    final_path = os.path.join(out_dir, f"{filename_stem}.{_CODEC_EXT[fmt]}")
-    if not os.path.exists(final_path):
-        # yt-dlp sometimes keeps the source extension if postprocessing failed
-        for f in os.listdir(out_dir):
-            if f.startswith(filename_stem):
-                return os.path.join(out_dir, f)
-        raise FileNotFoundError(f"Expected output not found: {final_path}")
-    return final_path
+        produced = [f for f in os.listdir(tmp_dir) if f.endswith(f".{fmt}")]
+        if not produced:
+            leftovers = ", ".join(sorted(os.listdir(tmp_dir))) or "nothing"
+            raise DownloadError(f"conversion to {fmt} failed (got: {leftovers}) -- is ffmpeg installed?")
+        os.replace(os.path.join(tmp_dir, produced[0]), final_path)
+        return final_path
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)

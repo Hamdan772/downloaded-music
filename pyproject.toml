@@ -1,11 +1,12 @@
 [project]
 name = "melograb"
-version = "0.1.0"
-description = "Spotify playlist/album/track puller: API or CSV metadata, YouTube Music matching, tagged MP3/M4A/Opus output."
-requires-python = ">=3.9"
+dynamic = ["version"]
+description = "Spotify playlist/album puller: public-page or CSV metadata, YouTube Music matching, tagged MP3/M4A/Opus output with synced lyrics."
+readme = "README.md"
+requires-python = ">=3.11"
 dependencies = [
-    "ytmusicapi>=1.9.0",
-    "yt-dlp>=2024.8.6",
+    "ytmusicapi>=1.10.0",
+    "yt-dlp[default]>=2025.11.12",
     "mutagen>=1.47.0",
     "rapidfuzz>=3.9.0",
     "requests>=2.32.0",
@@ -13,9 +14,23 @@ dependencies = [
     "pillow>=10.4.0",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
 [project.scripts]
 melograb = "melograb.cli:main"
+
+[project.gui-scripts]
 melograb-gui = "melograb.gui:main"
+
+[tool.setuptools]
+packages = ["melograb"]
+
+[tool.setuptools.dynamic]
+version = { attr = "melograb.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [build-system]
 requires = ["setuptools>=68"]

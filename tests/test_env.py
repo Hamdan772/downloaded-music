@@ -50,3 +50,29 @@ def test_bundled_bin_dir_goes_first(monkeypatch, tmp_path):
     env.ensure_tool_paths()
     assert os.environ["PATH"].split(os.pathsep)[0] == str(bin_dir)
     assert os.access(tool, os.X_OK)  # made executable
+
+
+def test_browser_from_launch_services():
+    data = {"LSHandlers": [
+        {"LSHandlerContentType": "public.html", "LSHandlerRoleAll": "com.apple.safari"},
+        {"LSHandlerURLScheme": "https", "LSHandlerRoleAll": "com.google.Chrome"},
+    ]}
+    assert env.browser_from_launch_services(data) == "chrome"
+    assert env.browser_from_launch_services({"LSHandlers": [
+        {"LSHandlerURLScheme": "https", "LSHandlerRoleAll": "com.example.unknown"}]}) == ""
+    assert env.browser_from_launch_services({}) == ""
+
+
+def test_default_browser_reads_plist(monkeypatch, tmp_path):
+    import plistlib
+
+    prefs = tmp_path / "Library/Preferences/com.apple.LaunchServices"
+    prefs.mkdir(parents=True)
+    with open(prefs / "com.apple.launchservices.secure.plist", "wb") as f:
+        plistlib.dump({"LSHandlers": [{"LSHandlerURLScheme": "https",
+                                       "LSHandlerRoleAll": "org.mozilla.firefox"}]}, f, fmt=plistlib.FMT_BINARY)
+    monkeypatch.setattr(env.sys, "platform", "darwin")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert env.default_browser() == "firefox"
+    (prefs / "com.apple.launchservices.secure.plist").unlink()
+    assert env.default_browser() == "safari"  # never changed the default

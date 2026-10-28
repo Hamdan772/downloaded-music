@@ -1,125 +1,227 @@
-# melograb
+<p align="center">
+  <img src="assets/icon.iconset/icon_256x256.png" width="96" height="96" alt="">
+</p>
 
-Takes the useful idea from both `spotdl` and `CSVmusic` and merges them into one tool, no Spotify Premium or API keys required:
+<h1 align="center">melograb</h1>
 
-- **Sources** — public **Spotify** playlists, albums, songs and artists (top tracks), including `spotify.link` share links; **YouTube / YouTube Music** playlists, albums and videos; **CSV** exports (TuneMyMusic, Exportify, …); or just **type a song** (`mac demarco - chamber of reflection`). Mix several in one go.
-- **Metadata** — reads the same public, no-login page data Spotify serves to any logged-out visitor, with each playlist track enriched against its own public page for its *real* album, album artist, cover, release date and in-album track number.
-- **Matching** — searches YouTube Music and ranks candidates by title/artist similarity (rapidfuzz), duration closeness, and penalties for the wrong version (live, cover, sped-up, remix…). If the best match won't download, the runner-up is tried automatically. Wrong match? Right-click it in the GUI and paste the right YouTube link.
-- **Output** — MP3, M4A, or Opus at your chosen quality, with embedded cover art and full ID3/MP4/Vorbis tags (album artist, track x/y, date, explicit flag, source link), laid out by a [file-name template](#file-layout-templates), plus an `.m3u8` playlist in the original order.
-- **Clean audio** — when only a music video is available, non-music intros/outros/skits are cut using [SponsorBlock](https://sponsor.ajay.app)'s community "music: non-music section" data.
-- **Lyrics** — fetches time-stamped lyrics from [lrclib.net](https://lrclib.net) (free, no key) and embeds them as real synced lyrics (ID3 `SYLT`) plus a text copy (`USLT`/`©lyr`/`LYRICS`) and a `.lrc` sidecar file. Falls back to plain lyrics. Can also **add lyrics to music you already have**.
-- **Resumable** — tracks that are already downloaded are skipped, so re-running after a failure only fetches what's missing.
-- **Speed** — downloads run concurrently (`--workers` / the Workers field, default 4).
-- **GUI** — a minimal desktop app with light/dark mode: paste links, untick what you don't want, hit Download. Click a red row to see why a track failed; **Retry Failed** re-runs just those. A CLI (`melograb`) is also available.
+<p align="center">
+  Turn Spotify and YouTube Music playlists into a tidy, tagged music library — with cover art and synced lyrics.<br>
+  No Spotify Premium, no API keys, no login.
+</p>
 
-It never touches Spotify's actual audio streams or DRM — like both tools it inspired, it re-sources audio from YouTube using Spotify (or your CSV) only for metadata/track identity.
+<p align="center">
+  <a href="https://github.com/Hamdan772/downloaded-music/releases/latest/download/melograb-macos-arm64.dmg"><b>Download for Apple Silicon</b></a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/Hamdan772/downloaded-music/releases/latest/download/melograb-macos-x86_64.dmg"><b>Download for Intel Mac</b></a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/Hamdan772/downloaded-music/releases">All releases</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/Hamdan772/downloaded-music/releases/latest"><img src="https://img.shields.io/github/v/release/Hamdan772/downloaded-music?label=release" alt="Latest release"></a>
+  <a href="https://github.com/Hamdan772/downloaded-music/actions/workflows/tests.yml"><img src="https://github.com/Hamdan772/downloaded-music/actions/workflows/tests.yml/badge.svg" alt="Tests"></a>
+  <a href="https://github.com/Hamdan772/downloaded-music/actions/workflows/macos-app.yml"><img src="https://github.com/Hamdan772/downloaded-music/actions/workflows/macos-app.yml/badge.svg" alt="macOS app build"></a>
+  <img src="https://img.shields.io/badge/macOS-11%2B-black?logo=apple" alt="macOS 11+">
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
+    <img src="docs/screenshot-light.png" width="760" alt="melograb downloading a playlist: a track list with done, downloading and queued songs, and options for format, quality and file layout">
+  </picture>
+</p>
+
+## How it works
+
+1. **Paste a link** — a Spotify playlist, album, song or artist; a YouTube Music playlist or video; a CSV export; or just type `artist - song`. Several at once is fine.
+2. **Review** — melograb shows the tracklist with each song's real album. Untick anything you don't want.
+3. **Download** — every song is matched on YouTube Music, converted, tagged with album art and lyrics, and filed into your music folder.
+
+```mermaid
+flowchart LR
+    A["Spotify · YouTube Music<br>CSV · search"] --> B["Tracklist<br>title, artist, album, cover"]
+    B --> C["Best YouTube Music match<br>title · artist · duration"]
+    C --> D["Audio<br>MP3 · M4A · Opus"]
+    D --> E["Tagged file<br>art · lyrics · track no."]
+    E --> F["Your library<br>+ .m3u8 playlist"]
+```
+
+melograb never touches Spotify's audio or DRM: Spotify (or your CSV) only tells it *which* songs you want, and the audio comes from YouTube — the same approach as spotDL.
+
+## Features
+
+**Sources**
+- Public **Spotify** playlists, albums, songs and artists (top tracks), including `spotify.link` share links from the phone app
+- **YouTube / YouTube Music** playlists, albums and single videos
+- **CSV** exports from TuneMyMusic, Exportify and similar tools
+- **Plain search** — `mac demarco - chamber of reflection`
+
+**Matching you can trust**
+- Ranks YouTube Music results by title, artist and duration, and avoids live versions, covers, sped-up edits and remixes you didn't ask for
+- If the best match won't download, the runner-up is tried automatically
+- Click a song to see what it matched; right-click to swap in a different YouTube link
+
+**A library that looks right**
+- Cover art, album, album artist, track *x of y*, year and an explicit flag on every file
+- Synced lyrics from [lrclib.net](https://lrclib.net), embedded *and* saved as `.lrc` (plain lyrics when there's no synced version)
+- Your choice of [file layout](#file-layout-templates), MP3 / M4A / Opus and quality, plus an `.m3u8` playlist in the original order
+- Non-music intros and outros cut from music videos using [SponsorBlock](https://sponsor.ajay.app)
+
+**Stays working**
+- Bundles ffmpeg and deno, and updates **yt-dlp** from inside the app when YouTube changes something
+- When YouTube asks to *confirm you're not a bot*, offers to use your browser's YouTube login and retry, in one click
+- Re-running skips songs you already have, so you can retry or update a playlist at any time
+- **Tools › Run Diagnostics** checks every component and tells you what's wrong
+
+**Also**
+- Add lyrics to music you already have (any source)
+- Light and dark mode, Dock-icon CSV drops, notifications, keeps the Mac awake while downloading
+- A full command-line version
 
 ## Install
 
-### Mac app (recommended)
+### Mac app
 
-Download the DMG for your Mac from the [latest release](https://github.com/Hamdan772/downloaded-music/releases/latest) — `macos-arm64` for Apple Silicon (M1 and newer), `macos-x86_64` for Intel — open it and drag **melograb** into **Applications**. Everything is included: ffmpeg, ffprobe and deno are bundled, so there's nothing else to install.
+Download the DMG for your Mac — **[Apple Silicon](https://github.com/Hamdan772/downloaded-music/releases/latest/download/melograb-macos-arm64.dmg)** (M1 and newer) or **[Intel](https://github.com/Hamdan772/downloaded-music/releases/latest/download/melograb-macos-x86_64.dmg)** — open it and drag **melograb** into **Applications**. Everything it needs is inside; there's nothing else to install.
 
-The app isn't notarized by Apple, so the first launch needs one extra step: right-click melograb in Applications and choose **Open** (on macOS 15+, try to open it once, then go to **System Settings › Privacy & Security** and click **Open Anyway**). After that it opens normally.
+> **First launch:** melograb isn't notarized by Apple yet, so macOS asks once. Right-click melograb in Applications and choose **Open**. On macOS 15 and newer, try to open it, then go to **System Settings › Privacy & Security** and click **Open Anyway**.
 
-YouTube changes often; when the bundled yt-dlp gets old, melograb shows an **Update now** banner that downloads the newest yt-dlp into the app — no reinstall needed.
+Not sure which Mac you have? **Apple menu › About This Mac** shows **Chip: Apple M…** (Apple Silicon) or **Processor: Intel**.
 
-### From source
+### From source (macOS and Linux; Windows untested)
 
-Requires Python 3.11+.
+Requires Python 3.11+, [ffmpeg](https://ffmpeg.org) and [deno](https://deno.com).
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+git clone https://github.com/Hamdan772/downloaded-music.git melograb && cd melograb
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-brew install ffmpeg      # required for audio conversion
-brew install deno        # required by yt-dlp to download from YouTube reliably
-brew install python-tk   # required for the GUI to render correctly on macOS
+brew install ffmpeg deno python-tk     # macOS; use your package manager elsewhere
 ```
 
-> macOS note: the GUI needs a Python built with a modern Tk (8.6+). Apple's bundled Command Line Tools Python ships Tk 8.5, which renders a blank window on Retina displays. Use a Homebrew Python (e.g. `/opt/homebrew/opt/python@3.12/bin/python3.12 -m venv .venv`) instead.
+Then `python -m melograb.gui` for the app or `python -m melograb --help` for the CLI.
 
-## Usage
+> On macOS, use a Python with Tk 8.6+ (e.g. Homebrew's `python@3.12` + `python-tk`). Apple's Command Line Tools Python ships Tk 8.5, which draws a blank window on Retina screens.
 
-### GUI
+## Using the app
 
-```bash
-python -m melograb.gui
-```
+- **Paste and Fetch.** A link you've just copied is filled in automatically when you switch to melograb.
+- **Pick songs.** Untick songs you don't want, click the ☑ header to toggle them all, or use **Filter**.
+- **Check matches.** Click a row to see what it matched on YouTube, or why it failed.
+- **Fix a wrong match.** Right-click → *Use a Different YouTube Link…*, paste the right one, and it's re-downloaded over the wrong file.
+- **Retry Failed** re-runs only what didn't work; re-running a playlist later fetches only new songs.
+- **YouTube sign-in** (top right of the options): which browser's YouTube login to use if YouTube asks for its bot check.
+- **Tools ›** *Add Lyrics to Existing Folder…*, *Update yt-dlp*, *Run Diagnostics…*, *Show Log*. **Appearance ›** light, dark or match system.
 
-Paste one or more links (or type a song) and click **Fetch** — a link you just copied is filled in automatically when you switch to melograb. Review the tracklist, untick anything you don't want (click the ☑ header to toggle all, or type in **Filter**), then **Download**.
+Your folder, format, layout and options are remembered.
 
-- **Click a row** to see what it matched on YouTube, or why it failed.
-- **Right-click a row** to open it on YouTube, swap in a different YouTube link, download just that track, or show it in Finder.
-- **Tools ›** *Add Lyrics to Existing Folder…*, *Update yt-dlp*, *Run Diagnostics…*, *Show Log*. **Appearance ›** light / dark / match system.
-- Drop a CSV export on the Dock icon to load it. The Mac stays awake while a download runs, and you get a notification when a long one finishes.
-
-Your output folder, format, layout and options are remembered between runs.
-
-### CLI
+## Command line
 
 ```bash
 # any mix of links, CSV files and searches
-python -m melograb https://open.spotify.com/playlist/XXXXXXXX -f mp3 -o ./downloads
-python -m melograb https://music.youtube.com/playlist?list=PLxxxx "dijon - coogie" my_export.csv
+python -m melograb https://open.spotify.com/playlist/XXXXXXXX -o ~/Music/melograb
+python -m melograb "https://music.youtube.com/playlist?list=PLxxxx" "dijon - coogie" my_export.csv
 
-# check what everything matches before downloading
+# see what everything matches before downloading
 python -m melograb <url> --dry-run
 
-# quality, layout, concurrency, and opting out of extras
-python -m melograb <url> -q 320 -t "{album_artist}/{album}/{track:02} {title}" -w 8
-python -m melograb <url> --no-lyrics --no-sponsorblock --no-playlist-file
-
-# add lyrics to a library you already have (any source)
+# add lyrics to a library you already have
 python -m melograb --add-lyrics ~/Music/Library
 ```
 
-The CLI exits with status 2 if any track failed, and prints the failures grouped by reason. `python -m melograb --help` lists everything.
+| Option | What it does |
+| --- | --- |
+| `-o DIR` | Output folder (default `./downloads`) |
+| `-f mp3\|m4a\|opus` | Format (default `mp3`) |
+| `-q best\|320\|256\|192\|128` | Quality when converting (default `best`) |
+| `-t TEMPLATE` | [File layout](#file-layout-templates); `--no-album-folders` for a flat folder |
+| `-w N` | Songs downloaded at once (default 4) |
+| `--cookies-from-browser NAME` | Use this browser's YouTube login (`safari`, `chrome`, `firefox`, `brave`, `edge`, `arc`, …) |
+| `--dry-run` | Show each song's match; download nothing |
+| `--no-lyrics` · `--no-sponsorblock` · `--no-playlist-file` | Turn off lyrics, intro/outro cutting, or the `.m3u8` |
+| `--add-lyrics DIR` | Add lyrics to every song in `DIR` (`--overwrite-lyrics` to replace) |
+| `--self-test [--online]` | Check everything works (optionally with a real download) |
 
-### File layout templates
+The CLI exits with status 2 if any song failed and prints the failures grouped by reason. Run it again to retry; finished songs are skipped.
 
-`/` separates folders. Fields: `{title}` `{artist}` `{album}` `{album_artist}` `{track}` `{total_tracks}` `{year}` `{date}` `{playlist}` `{position}`; numbers take a width, e.g. `{track:02}` → `07`.
+## File layout templates
 
-| Preset | Template | Example |
+`/` separates folders. Fields: `{title}` `{artist}` `{album}` `{album_artist}` `{track}` `{total_tracks}` `{year}` `{date}` `{playlist}` `{position}`. Numbers take a width: `{track:02}` → `07`.
+
+| Preset | Template | Result |
 | --- | --- | --- |
-| Album folders (default) | `{album}/{artist} - {title}` | `Oncle Jazz/Men I Trust - Husk.mp3` |
+| Album folders *(default)* | `{album}/{artist} - {title}` | `Oncle Jazz/Men I Trust - Husk.mp3` |
 | Flat | `{artist} - {title}` | `Men I Trust - Husk.mp3` |
 | Artist / Album / ## Title | `{album_artist}/{album}/{track:02} {title}` | `Men I Trust/Oncle Jazz/07 Husk.mp3` |
 | Playlist folder, in order | `{playlist}/{position:03} {artist} - {title}` | `Chill/012 Men I Trust - Husk.mp3` |
 
-### Building the Mac app yourself
+## Troubleshooting
+
+Start with **Tools › Run Diagnostics** (or `python -m melograb --self-test`). It checks every part of melograb, can test a real download, and **Copy Report** gives you something to paste into an issue.
+
+<details>
+<summary><b>YouTube says “confirm you're not a bot”</b></summary>
+
+YouTube sometimes wants proof you're a person, especially after many downloads. melograb offers to use your default browser's YouTube login and retry, or you can set **YouTube sign-in** yourself (CLI: `--cookies-from-browser`). The login is read on your Mac and only ever sent to YouTube.
+
+- **Safari** keeps its cookies private, so macOS needs you to give melograb **Full Disk Access** (System Settings › Privacy & Security › Full Disk Access).
+- **Chrome, Brave, Edge, Arc…** show a one-time keychain prompt; click **Always Allow**.
+- Without sign-in, waiting a while and clicking **Retry Failed** usually works too.
+</details>
+
+<details>
+<summary><b>Every song fails</b></summary>
+
+Almost always YouTube changed something and yt-dlp needs an update. The app checks on startup and shows an **Update now** banner (also under *Tools › Update yt-dlp*). From source: `pip install -U "yt-dlp[default]"`, and make sure ffmpeg and deno are installed.
+</details>
+
+<details>
+<summary><b>A song matched the wrong version</b></summary>
+
+Right-click it → *Use a Different YouTube Link…* and paste the right one. In the CLI, `--dry-run` shows every match up front.
+</details>
+
+<details>
+<summary><b>The Album column is empty for some songs</b></summary>
+
+Spotify rate-limits the per-song lookups on big playlists. Those songs fall back to the album name YouTube Music reports.
+</details>
+
+<details>
+<summary><b>Where are the logs?</b></summary>
+
+*Tools › Show Log*, or `~/Library/Logs/melograb/melograb.log` on macOS (`~/.cache/melograb/melograb.log` on Linux).
+</details>
+
+## Privacy
+
+melograb has no accounts, analytics or servers of its own. It talks to:
+
+| Service | Why |
+| --- | --- |
+| Spotify (public, logged-out pages) | Tracklists, albums, covers |
+| YouTube / YouTube Music | Finding and downloading audio |
+| [lrclib.net](https://lrclib.net) | Lyrics |
+| [SponsorBlock](https://sponsor.ajay.app) | Where music videos' non-music parts are |
+| PyPI and GitHub | Checking for yt-dlp and melograb updates |
+
+If you turn on **YouTube sign-in**, your browser's YouTube cookies are read locally and sent only to YouTube.
+
+## Building the Mac app
 
 ```bash
-packaging/build_macos.sh     # -> dist/melograb-<version>-macos-<arch>.dmg
+packaging/build_macos.sh        # → dist/melograb-<version>-macos-<arch>.dmg
 ```
 
-This fetches static ffmpeg/ffprobe and deno for your CPU, builds `melograb.app` with PyInstaller, runs the app's own self-test, and wraps it in a drag-to-install DMG. GitHub Actions does the same for Apple Silicon and Intel on every relevant push (grab the DMGs from the run's **Artifacts**) and attaches them to a release when you push a `v*` tag:
+This fetches static ffmpeg/ffprobe and deno for your CPU, builds `melograb.app` with PyInstaller, runs the app's own self-test, and wraps it in a drag-to-install DMG. GitHub Actions does the same for Apple Silicon and Intel on every relevant push (DMGs are under the run's **Artifacts**).
+
+**Releasing:** bump `__version__` in `melograb/__init__.py`, add a section to [CHANGELOG.md](CHANGELOG.md), then push a matching tag. CI builds both DMGs and publishes a release with the changelog as notes:
 
 ```bash
 git tag v0.4.0 && git push origin v0.4.0
 ```
 
-To ship a signed and notarized build (no first-launch warning), add these repository secrets: `MACOS_CERTIFICATE` (base64 of your Developer ID Application .p12), `MACOS_CERTIFICATE_PASSWORD`, `MACOS_SIGN_IDENTITY` (e.g. `Developer ID Application: Your Name (TEAMID)`), and for notarization `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD` (an app-specific password).
-
-## Troubleshooting
-
-**Something's not working.** Run *Tools › Run Diagnostics* in the app (or `python -m melograb --self-test`): it checks every component and can test a real download, and **Copy Report** gives you something to paste into an issue.
-
-**Every track fails.** That almost always means YouTube changed something and yt-dlp needs updating. The GUI checks on startup and offers an **Update now** button; or run:
-
-```bash
-pip install -U "yt-dlp[default]"
-```
-
-Also make sure ffmpeg and a JavaScript runtime (deno, or node/bun) are installed. The GUI shows a yellow banner at the top if either is missing.
-
-**“YouTube is asking for bot verification.”** YouTube sometimes wants proof you're a person, especially after many downloads. Set **YouTube sign-in** (GUI, top right of the options) to the browser you watch YouTube in, or pass `--cookies-from-browser safari|chrome|firefox|…` in the CLI. melograb then reads that browser's YouTube login locally, the same way yt-dlp does; nothing is sent anywhere but YouTube. On macOS, **Safari** needs melograb to have Full Disk Access (System Settings › Privacy & Security › Full Disk Access), and **Chrome**-family browsers show a one-time keychain prompt — click *Always Allow*. Without sign-in, waiting a while and using **Retry Failed** also usually works.
-
-**One track matched the wrong song.** Right-click it → *Use a Different YouTube Link…* and paste the right one; it's re-downloaded over the wrong file. In the CLI, `--dry-run` shows every match up front.
-
-**Seeing why a track failed.** In the GUI, click the red row — the reason appears under the list. Full details (including yt-dlp's own output) are in the log: *Tools › Show Log*, or open `~/Library/Logs/melograb/melograb.log` (macOS) / `~/.cache/melograb/melograb.log` (Linux).
-
-**Album column is empty.** Spotify rate-limits the per-track lookups for big playlists; tracks without a Spotify album fall back to the album name YouTube Music reports.
+**Signing and notarizing** (removes the first-launch warning) needs an Apple Developer account. Add these repository secrets and CI handles the rest: `MACOS_CERTIFICATE` (base64 of a *Developer ID Application* .p12), `MACOS_CERTIFICATE_PASSWORD`, `MACOS_SIGN_IDENTITY` (e.g. `Developer ID Application: Your Name (TEAMID)`), and `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD` (an app-specific password).
 
 ## Development
 
@@ -128,8 +230,12 @@ pip install -e ".[dev]"
 pytest
 ```
 
-The tests mock all network access; the tagging and end-to-end tests generate real audio files and need ffmpeg, and the GUI tests need a display (CI uses `xvfb-run`).
+All network access is mocked. The tagging and end-to-end tests make real audio files with ffmpeg; the GUI tests need a display (CI uses `xvfb-run`). `python scripts/screenshots.py` regenerates the screenshots above.
+
+## Credits
+
+Built on [yt-dlp](https://github.com/yt-dlp/yt-dlp), [ytmusicapi](https://github.com/sigma67/ytmusicapi), [mutagen](https://github.com/quodlibet/mutagen), [RapidFuzz](https://github.com/rapidfuzz/RapidFuzz), [FFmpeg](https://ffmpeg.org), [Deno](https://deno.com), [lrclib.net](https://lrclib.net) and [SponsorBlock](https://sponsor.ajay.app); inspired by [spotDL](https://github.com/spotDL/spotify-downloader) and CSVmusic. Licenses of bundled components: [THIRD_PARTY_NOTICES.md](packaging/THIRD_PARTY_NOTICES.md).
 
 ## Legal note
 
-Spotify's and YouTube's terms generally don't permit downloading/extracting content outside their own apps' built-in offline features. Whether personal, non-redistributed use crosses into infringement is genuinely unsettled and jurisdiction-dependent. This tool only reads metadata Spotify already publishes to logged-out visitors — it never bypasses a login, paywall, or DRM. For personal use only with content you have the right to access — don't redistribute downloaded files.
+Spotify's and YouTube's terms generally don't permit downloading content outside their own apps' offline features. Whether personal, non-redistributed use crosses into infringement is unsettled and depends on where you live. melograb only reads metadata Spotify already shows logged-out visitors and never bypasses a login, paywall or DRM. Use it only for music you have the right to access, and don't redistribute the files.

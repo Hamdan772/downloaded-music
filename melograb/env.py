@@ -228,3 +228,47 @@ def latest_app_release(repo: str, timeout: int = 6) -> dict:
         return {"version": version, "url": data.get("html_url") or ""} if version else {}
     except Exception:  # noqa: BLE001
         return {}
+
+
+# ---------- default browser (to offer YouTube sign-in with one click) ----------
+
+# macOS bundle id -> yt-dlp browser name
+_BROWSER_BUNDLES = {
+    "com.apple.safari": "safari",
+    "com.google.chrome": "chrome",
+    "org.mozilla.firefox": "firefox",
+    "com.brave.browser": "brave",
+    "com.microsoft.edgemac": "edge",
+    "company.thebrowser.browser": "arc",
+    "com.vivaldi.vivaldi": "vivaldi",
+    "com.operasoftware.opera": "opera",
+    "org.chromium.chromium": "chromium",
+}
+
+
+def browser_from_launch_services(data: dict) -> str:
+    """yt-dlp browser name for the https handler in a LaunchServices plist."""
+    for handler in data.get("LSHandlers") or []:
+        if isinstance(handler, dict) and handler.get("LSHandlerURLScheme") == "https":
+            return _BROWSER_BUNDLES.get(str(handler.get("LSHandlerRoleAll", "")).lower(), "")
+    return ""
+
+
+def default_browser() -> str:
+    """The user's default web browser as a yt-dlp browser name, or '' if
+    unknown (or not on macOS). Safari is the default when none was chosen."""
+    if sys.platform != "darwin":
+        return ""
+    import plistlib
+
+    path = os.path.expanduser(
+        "~/Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist"
+    )
+    try:
+        with open(path, "rb") as f:
+            data = plistlib.load(f)
+    except FileNotFoundError:
+        return "safari"
+    except Exception:  # noqa: BLE001 - unreadable/odd plist: just don't suggest
+        return ""
+    return browser_from_launch_services(data) or "safari"

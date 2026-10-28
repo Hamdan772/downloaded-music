@@ -171,6 +171,7 @@ class MelograbApp(tk.Tk):
         self.started_at = 0.0
         self.cover_photo = None  # keep a ref so Tk doesn't GC it
         self._last_autofill = ""
+        self._sign_in_declined = False
         self.msg_queue: queue.Queue = queue.Queue()
 
         self._set_window_icon()
@@ -399,7 +400,7 @@ class MelograbApp(tk.Tk):
             ("title", "Title", 220, "w", True),
             ("album", "Album", 160, "w", True),
             ("time", "Time", 52, "e", False),
-            ("status", "Status", 110, "center", False),
+            ("status", "Status", 124, "center", False),
         ]:
             self.tree.heading(col, text=label)
             self.tree.column(col, width=w, minwidth=60 if stretch else w, anchor=anchor, stretch=stretch)
@@ -1156,6 +1157,38 @@ class MelograbApp(tk.Tk):
         self._refresh_checks()
         if time.monotonic() - self.started_at > 15 and self.focus_displayof() is None:
             _notify("melograb", f"{ok} downloaded" + (f", {len(failed)} failed" if failed else ""))
+        blocked = sum("bot verification" in (r.error or "") for r in failed)
+        if blocked and not self._browser() and not self._sign_in_declined:
+            self.after(300, self._offer_sign_in, blocked)
+
+    def _offer_sign_in(self, blocked: int):
+        """YouTube blocked downloads with its bot check: offer to borrow the
+        login from the user's default browser and retry, in one click."""
+        browser = env.default_browser()
+        if not browser:
+            messagebox.showinfo(
+                "YouTube wants to check you're not a bot",
+                f"YouTube blocked {blocked} download{'s' if blocked != 1 else ''}.\n\n"
+                "Set “YouTube sign-in” to the browser you watch YouTube in, then click Retry Failed.",
+            )
+            return
+        name = browser.title()
+        note = {
+            "safari": "\n\nSafari keeps cookies private: macOS will ask you to give melograb Full Disk Access "
+                      "(System Settings › Privacy & Security) the first time.",
+        }.get(browser, f"\n\nmacOS may ask to let melograb use “{name} Safe Storage” — click Always Allow."
+          if browser != "firefox" else "")
+        if messagebox.askyesno(
+            "YouTube wants to check you're not a bot",
+            f"YouTube blocked {blocked} download{'s' if blocked != 1 else ''}. melograb can use your YouTube "
+            f"login from {name} (your default browser) to get past this — it's read on this Mac and only "
+            f"sent to YouTube.{note}\n\nUse {name} and retry the failed songs?",
+        ):
+            self.browser_var.set(name)
+            self._persist_settings()
+            self.on_retry_failed()
+        else:
+            self._sign_in_declined = True
 
     def _on_msg_updated(self, ok, output):
         btn = self.banner_rows.get("ytdlp", (None, None))[1]

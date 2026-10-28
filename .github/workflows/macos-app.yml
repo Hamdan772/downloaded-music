@@ -37,6 +37,14 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Check the tag matches the app version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version="$(python -c 'import melograb; print(melograb.__version__)')"
+          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} doesn't match melograb.__version__ (${version})"; exit 1
+          fi
+
       - name: Import signing certificate
         if: env.HAS_SIGNING_CERT == 'true'
         env:
@@ -80,11 +88,41 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v5
+
       - uses: actions/download-artifact@v4
         with:
-          path: dmgs
+          path: built
           merge-multiple: true
+
+      - name: Prepare assets and notes
+        run: |
+          mkdir release
+          # Stable names, so README links to releases/latest/download/... always work.
+          for f in built/*.dmg; do
+            arch="${f##*-macos-}"
+            cp "$f" "release/melograb-macos-${arch}"
+          done
+          (cd release && sha256sum *.dmg > SHA256SUMS.txt)
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" {on=1; next}
+            on && /^## \[/ {exit}
+            on {print}
+          ' CHANGELOG.md > notes.md
+          cat >> notes.md <<'NOTES'
+
+          ### Install
+          Download **melograb-macos-arm64.dmg** for Apple Silicon (M1 and newer) or **melograb-macos-x86_64.dmg** for Intel, open it and drag melograb into Applications.
+
+          First launch: right-click melograb in Applications and choose **Open** (macOS 15+: open it once, then *System Settings › Privacy & Security › Open Anyway*). The app isn't notarized by Apple yet.
+          NOTES
+          ls -l release; cat notes.md
+
       - uses: softprops/action-gh-release@v2
         with:
-          files: dmgs/*.dmg
-          generate_release_notes: true
+          name: melograb ${{ github.ref_name }}
+          body_path: notes.md
+          files: |
+            release/*.dmg
+            release/SHA256SUMS.txt

@@ -110,3 +110,17 @@ def test_dropped_csv_is_fetched(app, tmp_path, monkeypatch):
     app.mainloop()
     drain(app)
     assert [t.title for t in app.tracks] == ["Husk"] and not app.empty_label.winfo_ismapped()
+
+
+def test_bot_check_offers_default_browser_and_retries(app, monkeypatch):
+    load(app, 2)
+    for i, t in enumerate(app.tracks):
+        app.results[i] = pipeline.Result(t, error="YouTube is asking for bot verification -- pick a browser")
+    app.run_indices = [0, 1]
+    monkeypatch.setattr(env, "default_browser", lambda: "chrome")
+    asked, retried = [], []
+    monkeypatch.setattr(gui.messagebox, "askyesno", lambda title, msg: asked.append(msg) or True)
+    monkeypatch.setattr(app, "on_retry_failed", lambda: retried.append(True))
+    app._offer_sign_in(2)
+    assert "Chrome" in asked[0] and app.browser_var.get() == "Chrome" and retried
+    assert app._pipeline_options().cookies_browser == "chrome"

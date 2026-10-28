@@ -14,7 +14,7 @@ from .track import Track, sanitize_filename
 log = logging.getLogger(__name__)
 
 # Errors that will hit every candidate the same way -- no point retrying.
-_FATAL_HINTS = ("ffmpeg is not installed",)
+_FATAL_HINTS = ("ffmpeg is not installed", "bot verification", "browser's cookies", "that browser's cookies")
 
 
 @dataclass
@@ -26,12 +26,16 @@ class Options:
     # Cut non-music intros/outros from music-video matches via SponsorBlock.
     remove_non_music: bool = True
     workers: int = 4
+    # Borrow this browser's YouTube login when YouTube demands a bot check.
+    cookies_browser: str = ""
 
     def validate(self) -> None:
         if self.fmt not in downloader.FORMATS:
             raise ValueError(f"unsupported format {self.fmt!r}")
         if self.quality not in downloader.QUALITIES:
             raise ValueError(f"unsupported quality {self.quality!r}")
+        if self.cookies_browser and self.cookies_browser not in downloader.BROWSERS:
+            raise ValueError(f"unsupported browser {self.cookies_browser!r}")
         templates.validate(self.template)
 
 
@@ -113,6 +117,7 @@ def process_one(track: Track, out_dir: str, options: Options) -> Result:
                     options.fmt,
                     quality=options.quality,
                     remove_non_music=cutting and cand.get("resultType") != "song",
+                    cookies_browser=options.cookies_browser,
                 )
                 used = cand
                 break

@@ -16,6 +16,10 @@ FORMATS = ("mp3", "m4a", "opus")
 # "best" = highest-quality VBR when transcoding; numbers are kbps. When the
 # source is already in the target codec it's copied untouched either way.
 QUALITIES = ("best", "320", "256", "192", "128")
+# Browsers yt-dlp can borrow a YouTube login from, for when YouTube asks to
+# "confirm you're not a bot".
+BROWSERS = ("safari", "chrome", "firefox", "brave", "edge", "arc", "vivaldi", "opera", "chromium")
+SIGN_IN_HINT = "pick the browser you use YouTube in under “YouTube sign-in” (CLI: --cookies-from-browser)"
 
 # Prefer a source stream that's already in the target codec so m4a/opus
 # don't get needlessly re-encoded.
@@ -31,7 +35,10 @@ _ERROR_HINTS = (
     ("ffprobe and ffmpeg not found", "ffmpeg is not installed (macOS: `brew install ffmpeg`)"),
     ("ffmpeg not found", "ffmpeg is not installed (macOS: `brew install ffmpeg`)"),
     ("confirm your age", "video is age-restricted"),
-    ("sign in to confirm", f"YouTube is asking for bot verification -- {_UPDATE_HINT}, or wait and retry"),
+    ("operation not permitted", "macOS blocked access to the browser's cookies -- give melograb Full Disk Access "
+     "(System Settings › Privacy & Security) or choose a different browser"),
+    ("cookies database", "couldn't find that browser's cookies -- is it installed, and have you opened YouTube in it?"),
+    ("sign in to confirm", f"YouTube is asking for bot verification -- {SIGN_IN_HINT}, or wait a while and retry"),
     ("requested format is not available", f"YouTube returned no downloadable audio -- {_UPDATE_HINT}"),
     ("only images are available", f"YouTube returned no downloadable audio -- {_UPDATE_HINT}"),
     ("challenge solving failed", f"couldn't solve YouTube's player challenge -- {_UPDATE_HINT}"),
@@ -72,7 +79,9 @@ class _YtdlpLogger:
         log.error(_ANSI_RE.sub("", msg))
 
 
-def _ydl_opts(tmp_dir: str, fmt: str, quality: str = "best", remove_non_music: bool = False) -> dict:
+def _ydl_opts(
+    tmp_dir: str, fmt: str, quality: str = "best", remove_non_music: bool = False, cookies_browser: str = ""
+) -> dict:
     postprocessors = []
     if remove_non_music:
         # Cut intros/skits/outros that SponsorBlock users marked as
@@ -104,6 +113,10 @@ def _ydl_opts(tmp_dir: str, fmt: str, quality: str = "best", remove_non_music: b
     runtimes = env.available_js_runtimes()
     if runtimes:
         opts["js_runtimes"] = {name: {} for name in runtimes}
+    if cookies_browser:
+        # Use the YouTube login from this browser (yt-dlp reads its cookies
+        # locally; nothing is sent anywhere but YouTube).
+        opts["cookiesfrombrowser"] = (cookies_browser,)
     return opts
 
 
@@ -114,6 +127,7 @@ def download_audio(
     fmt: str = "mp3",
     quality: str = "best",
     remove_non_music: bool = False,
+    cookies_browser: str = "",
 ) -> str:
     """Download `video_id` as `<out_dir>/<filename_stem>.<fmt>`; returns the path.
     Raises DownloadError with a human-readable reason on failure."""
@@ -121,6 +135,8 @@ def download_audio(
         raise ValueError(f"Unsupported format: {fmt}")
     if quality not in QUALITIES:
         raise ValueError(f"Unsupported quality: {quality}")
+    if cookies_browser and cookies_browser not in BROWSERS:
+        raise ValueError(f"Unsupported browser: {cookies_browser}")
 
     os.makedirs(out_dir, exist_ok=True)
     final_path = os.path.join(out_dir, f"{filename_stem}.{fmt}")
@@ -132,7 +148,7 @@ def download_audio(
         url = f"https://www.youtube.com/watch?v={video_id}"
         try:
             try:
-                with yt_dlp.YoutubeDL(_ydl_opts(tmp_dir, fmt, quality, remove_non_music)) as ydl:
+                with yt_dlp.YoutubeDL(_ydl_opts(tmp_dir, fmt, quality, remove_non_music, cookies_browser)) as ydl:
                     ydl.download([url])
             except yt_dlp.utils.DownloadError as e:
                 # SponsorBlock is a nice-to-have; its API being down mustn't
@@ -142,7 +158,7 @@ def download_audio(
                 log.warning("SponsorBlock unavailable for %s, downloading uncut: %s", video_id, e)
                 for f in os.listdir(tmp_dir):
                     os.remove(os.path.join(tmp_dir, f))
-                with yt_dlp.YoutubeDL(_ydl_opts(tmp_dir, fmt, quality, False)) as ydl:
+                with yt_dlp.YoutubeDL(_ydl_opts(tmp_dir, fmt, quality, False, cookies_browser)) as ydl:
                     ydl.download([url])
         except yt_dlp.utils.DownloadError as e:
             raise DownloadError(friendly_error(str(e))) from e

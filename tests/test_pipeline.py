@@ -19,8 +19,9 @@ def fakes(monkeypatch):
             {"videoId": f"{track.title}-2"},
         ]
 
-    def download(video_id, out_dir, stem, fmt, quality="best", remove_non_music=False):
+    def download(video_id, out_dir, stem, fmt, quality="best", remove_non_music=False, cookies_browser=""):
         state["downloads"].append(video_id)
+        state["browser"] = cookies_browser
         state.setdefault("calls", []).append((video_id, quality, remove_non_music))
         if video_id in state["fail_ids"]:
             raise downloader.DownloadError("video is unavailable")
@@ -155,3 +156,19 @@ def test_preview(fakes):
     assert m["display"] == "A - T" and m["videoId"] == "v"
     fakes["candidates"] = []
     assert pipeline.preview([Track("T", "A")]) == [None]
+
+
+def test_browser_sign_in_is_passed_and_bot_checks_dont_retry(tmp_path, fakes, monkeypatch):
+    pipeline.run([Track("A", "X", album="Alb")], str(tmp_path), pipeline.Options(cookies_browser="safari"))
+    assert fakes["browser"] == "safari"
+
+    def blocked(video_id, *a, **k):
+        fakes["downloads"].append(video_id)
+        raise downloader.DownloadError("YouTube is asking for bot verification -- pick the browser")
+
+    monkeypatch.setattr(downloader, "download_audio", blocked)
+    fakes["downloads"].clear()
+    (r,) = pipeline.run([Track("B", "Y", album="Alb")], str(tmp_path))
+    assert r.status == "failed" and fakes["downloads"] == ["B-1"]  # second candidate would fail the same way
+    with pytest.raises(ValueError):
+        pipeline.Options(cookies_browser="netscape").validate()

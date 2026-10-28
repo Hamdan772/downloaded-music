@@ -144,6 +144,7 @@ STATUS_LABELS = {
 }
 CHECKED, UNCHECKED = "☑", "☐"
 CUSTOM_LAYOUT = "Custom"
+NO_BROWSER = "None"
 SAMPLE_TRACK = Track(
     title="Husk", artist="Men I Trust", album="Oncle Jazz", track_number=7, release_date="2019-11-08",
     playlist="My Playlist", position=1,
@@ -440,6 +441,11 @@ class MelograbApp(tk.Tk):
         )
         self.m3u_var = tk.BooleanVar(value=s.get("write_playlist", True))
         ttk.Checkbutton(opts, text="Write .m3u8 playlist", variable=self.m3u_var).pack(side="left", padx=(16, 0))
+        browser = s.get("cookies_browser", "")
+        self.browser_var = tk.StringVar(value=browser.title() if browser in downloader.BROWSERS else NO_BROWSER)
+        browsers = [NO_BROWSER, *(b.title() for b in downloader.BROWSERS)]
+        ttk.Combobox(opts, textvariable=self.browser_var, values=browsers, width=9, state="readonly").pack(side="right")
+        ttk.Label(opts, text="YouTube sign-in", style="Sub.TLabel").pack(side="right", padx=(0, 6))
 
         opts2 = ttk.Frame(outer)
         opts2.pack(fill="x", pady=(10, 0))
@@ -618,7 +624,12 @@ class MelograbApp(tk.Tk):
             quality=self.quality_var.get(),
             remove_non_music=self.sponsorblock_var.get(),
             workers=self._workers(),
+            cookies_browser=self._browser(),
         )
+
+    def _browser(self) -> str:
+        choice = self.browser_var.get().lower()
+        return choice if choice in downloader.BROWSERS else ""
 
     def _persist_settings(self):
         self.settings.update(
@@ -631,6 +642,7 @@ class MelograbApp(tk.Tk):
             remove_non_music=self.sponsorblock_var.get(),
             write_playlist=self.m3u_var.get(),
             theme=self.theme_var.get(),
+            cookies_browser=self._browser(),
         )
         self.settings.pop("group_by_album", None)
         _save_settings(self.settings)
@@ -1132,7 +1144,11 @@ class MelograbApp(tk.Tk):
                 reason, count = reasons[0]
                 summary += f" (most common: {reason})" if count > 1 else f" ({reason})"
             self.detail_label.configure(style="Detail.TLabel")
-            self.detail_var.set("Click a red row to see why · right-click it to pick a different YouTube link.")
+            if any("bot verification" in (r.error or "") for r in failed) and not self._browser():
+                self.detail_var.set("YouTube wants proof you're not a bot: set “YouTube sign-in” (above Format) "
+                                    "to the browser you watch YouTube in, then Retry Failed.")
+            else:
+                self.detail_var.set("Click a red row to see why · right-click it to pick a different YouTube link.")
             self.retry_btn.pack(side="right", padx=(0, 8), after=self.download_btn)
         self.status_var.set(summary)
         if ok:

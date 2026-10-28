@@ -113,6 +113,8 @@ pip install -U "yt-dlp[default]"
 
 Also make sure ffmpeg and a JavaScript runtime (deno, or node/bun) are installed. The GUI shows a yellow banner at the top if either is missing.
 
+**“YouTube is asking for bot verification.”** YouTube sometimes wants proof you're a person, especially after many downloads. Set **YouTube sign-in** (GUI, top right of the options) to the browser you watch YouTube in, or pass `--cookies-from-browser safari|chrome|firefox|…` in the CLI. melograb then reads that browser's YouTube login locally, the same way yt-dlp does; nothing is sent anywhere but YouTube. On macOS, **Safari** needs melograb to have Full Disk Access (System Settings › Privacy & Security › Full Disk Access), and **Chrome**-family browsers show a one-time keychain prompt — click *Always Allow*. Without sign-in, waiting a while and using **Retry Failed** also usually works.
+
 **One track matched the wrong song.** Right-click it → *Use a Different YouTube Link…* and paste the right one; it's re-downloaded over the wrong file. In the CLI, `--dry-run` shows every match up front.
 
 **Seeing why a track failed.** In the GUI, click the red row — the reason appears under the list. Full details (including yt-dlp's own output) are in the log: *Tools › Show Log*, or open `~/Library/Logs/melograb/melograb.log` (macOS) / `~/.cache/melograb/melograb.log` (Linux).

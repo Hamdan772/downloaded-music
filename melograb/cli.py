@@ -67,6 +67,9 @@ def build_parser() -> argparse.ArgumentParser:
     out.add_argument("--no-sponsorblock", action="store_true",
                      help="keep non-music intros/outros in music-video matches")
     out.add_argument("--no-playlist-file", action="store_true", help="don't write an .m3u8 playlist")
+    out.add_argument("--cookies-from-browser", choices=downloader.BROWSERS, metavar="BROWSER",
+                     help="use your YouTube login from this browser when YouTube asks to confirm you're not a bot "
+                          f"({', '.join(downloader.BROWSERS)})")
 
     run = parser.add_argument_group("run")
     run.add_argument("-w", "--workers", type=_positive_int, default=4, help="concurrent downloads (default: 4)")
@@ -147,6 +150,7 @@ def main(argv=None):
         quality=args.quality,
         remove_non_music=not args.no_sponsorblock,
         workers=args.workers,
+        cookies_browser=args.cookies_from_browser or "",
     )
 
     if not args.dry_run:

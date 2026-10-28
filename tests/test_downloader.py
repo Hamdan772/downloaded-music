@@ -10,7 +10,10 @@ from melograb import downloader
     [
         ("ERROR: [youtube] abc: Requested format is not available. Use --list-formats", "yt-dlp"),
         ("ERROR: Postprocessing: ffprobe and ffmpeg not found. Please install", "ffmpeg is not installed"),
-        ("ERROR: [youtube] abc: Sign in to confirm you're not a bot", "bot verification"),
+        ("ERROR: [youtube] abc: Sign in to confirm you're not a bot", "YouTube sign-in"),
+        ("ERROR: could not find chrome cookies database in x", "couldn't find that browser's cookies"),
+        ("ERROR: [Errno 1] Operation not permitted: '/Users/a/Library/Cookies/Cookies.binarycookies'",
+         "Full Disk Access"),
         ("ERROR: [youtube] abc: Video unavailable", "unavailable"),
         ("\x1b[0;31mERROR:\x1b[0m something odd\nsecond line", "something odd"),
     ],
@@ -116,3 +119,11 @@ def test_sponsorblock_outage_falls_back_to_uncut(tmp_path, monkeypatch):
 def test_rejects_unknown_quality(tmp_path):
     with pytest.raises(ValueError):
         downloader.download_audio("vid", str(tmp_path), "x", "mp3", quality="999")
+
+
+def test_cookies_browser_option(tmp_path):
+    opts = downloader._ydl_opts(str(tmp_path), "mp3", cookies_browser="firefox")
+    assert opts["cookiesfrombrowser"] == ("firefox",)
+    assert "cookiesfrombrowser" not in downloader._ydl_opts(str(tmp_path), "mp3")
+    with pytest.raises(ValueError):
+        downloader.download_audio("vid", str(tmp_path), "x", "mp3", cookies_browser="netscape")

@@ -15,7 +15,7 @@ authors and is distributed under its own license.
 | requests / urllib3 / certifi | Apache-2.0 / MIT / MPL-2.0 | https://github.com/psf/requests |
 | Pillow | MIT-CMU | https://github.com/python-pillow/Pillow |
 | tqdm | MPL-2.0 / MIT | https://github.com/tqdm/tqdm |
-| FFmpeg (ffmpeg, ffprobe) | GPL-2.0-or-later (static build) | https://ffmpeg.org — binaries from https://ffmpeg.martin-riedl.de |
+| FFmpeg (ffmpeg, ffprobe) | GPL-2.0-or-later (static build) | https://ffmpeg.org — binaries from https://ffmpeg.martin-riedl.de (or, as a fallback, the imageio-ffmpeg wheel: https://github.com/imageio/imageio-binaries) |
 | Deno | MIT | https://github.com/denoland/deno |
 
 FFmpeg's corresponding source code is available from https://ffmpeg.org/download.html

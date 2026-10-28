@@ -3,6 +3,7 @@
 ## [0.5.0] - 2026-10-28
 
 ### Album art and metadata
+- **Fixed: playlist songs had no album and the playlist's cover.** Spotify's song pages no longer carry album info in their HTML, so those lookups had silently stopped working. melograb now reads each song's public embed for its real album cover (640×640) and release date, and gets the album name from Apple Music.
 - **The original album cover, every time.** Songs no longer fall back to the playlist's cover. When Spotify can't supply a song's album, melograb looks it up on Apple Music and embeds the official artwork at 1200×1200; video thumbnails, the last resort, are trimmed and cropped square.
 - **Complete metadata in every file:** album, album artist, track and disc numbers (*x of y*), **genre**, release date and explicit flag — filled from Apple Music when the source doesn't have them, without overwriting what Spotify provided. One lookup per album keeps it quick.
 - New option **Official album cover & info (Apple Music)** (on by default; CLI `--no-album-lookup`).

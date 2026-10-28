@@ -192,21 +192,24 @@ def _describe_tags(path: str) -> str:
 
 
 def _online_playlist() -> str:
-    from . import public_source
+    from . import apple_music, public_source
 
     coll = public_source.fetch_collection(ONLINE_PLAYLIST)
-    with_album = sum(bool(t.album) for t in coll.tracks)
-    official = sum(t.cover_is_official for t in coll.tracks)
-    if not with_album:
-        raise RuntimeError(f"none of {len(coll.tracks)} tracks got their album from Spotify")
-    return f"{with_album}/{len(coll.tracks)} tracks got their album, {official} their album cover"
+    covers = sum(t.cover_is_official for t in coll.tracks)
+    if not covers:
+        raise RuntimeError(f"none of {len(coll.tracks)} tracks got their album cover from Spotify")
+    sample = coll.tracks[:3]
+    named = [t for t in sample if apple_music.enrich(t) and t.album]
+    albums = "; ".join(f"{t.display_name} → {t.album}" for t in named)
+    return (f"{covers}/{len(coll.tracks)} tracks got their album cover; Apple Music named the album for "
+            f"{len(named)}/{len(sample)} ({albums})")
 
 
 def _online_apple() -> str:
     from . import apple_music
     from .track import Track
 
-    t = Track(title="Husk", artist="Men I Trust", duration_ms=215_000)
+    t = Track(title="Husk", artist="Men I Trust", duration_ms=204_651)
     if not apple_music.enrich(t):
         raise RuntimeError("no match for Men I Trust - Husk")
     return f"{t.album} · {t.genre} · {t.release_date} · track {t.track_number}/{t.total_tracks} · {t.cover_url}"

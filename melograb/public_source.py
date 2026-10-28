@@ -7,7 +7,6 @@ visitors; it never touches audio streams or anything behind a login wall.
 """
 from __future__ import annotations
 
-import html
 import json
 import logging
 import re
@@ -34,8 +33,6 @@ _HEADERS = {
 }
 _NEXT_DATA_RE = re.compile(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.S)
 _ID_RE = re.compile(r"^[A-Za-z0-9]{16,32}$")
-_META_TAG_RE = re.compile(r"<meta\s[^>]*>", re.I)
-_META_ATTR_RE = re.compile(r'([a-zA-Z:-]+)\s*=\s*("([^"]*)"|\'([^\']*)\')')
 
 _session_lock = threading.Lock()
 _session: Optional[requests.Session] = None
@@ -252,8 +249,7 @@ def _single_track(entity: dict, track_id: str) -> Collection:
         spotify_id=track_id,
         explicit=bool(entity.get("isExplicit")),
     )
-    _enrich_one(track)
-    track.playlist = track.album or track.display_name
+    track.playlist = track.display_name
     return Collection(kind="track", name=track.display_name, cover_url=track.cover_url, tracks=[track])
 
 
@@ -263,88 +259,35 @@ def fetch_playlist(url: str) -> tuple[str, list[Track]]:
     return collection.name, collection.tracks
 
 
-def _parse_meta(page: str) -> dict:
-    """{name-or-property: content} for every <meta> tag, attribute order and
-    quoting agnostic. First occurrence wins."""
-    meta = {}
-    for tag in _META_TAG_RE.findall(page):
-        attrs = {}
-        for key, _, dq, sq in _META_ATTR_RE.findall(tag):
-            attrs[key.lower()] = html.unescape(dq if dq or not sq else sq)
-        key = attrs.get("name") or attrs.get("property")
-        if key and "content" in attrs and key not in meta:
-            meta[key] = attrs["content"]
-    return meta
-
-
-_album_cache: dict = {}
-_album_cache_lock = threading.Lock()
-
-
-def _album_info(album_id: str, timeout: int = 15) -> dict:
-    with _album_cache_lock:
-        if album_id in _album_cache:
-            return _album_cache[album_id]
-    try:
-        entity = _get_entity("album", album_id, timeout=timeout)
-        info = {
-            "name": entity.get("name") or entity.get("title") or "",
-            "cover": _extract_cover(entity),
-            "artist": _artist_text(entity),
-            "total": len(entity.get("trackList") or []),
-            "date": _release_date(entity),
-        }
-    except Exception as e:  # noqa: BLE001 - enrichment is best-effort
-        log.info("album %s lookup failed: %s", album_id, e)
-        info = {}
-    with _album_cache_lock:
-        _album_cache[album_id] = info
-    return info
-
-
 def _enrich_one(track: Track, timeout: int = 15) -> None:
+    """Add what a playlist entry lacks from the song's own public embed: its
+    album's cover art (640px), the release date and the full artist list.
+
+    Spotify's song pages used to carry the album name in <meta> tags, but
+    they're now a script-only web player; the album name comes from Apple
+    Music / YouTube Music later in the pipeline instead.
+    """
     if not track.spotify_id:
         return
     try:
-        resp = _http().get(f"https://open.spotify.com/track/{track.spotify_id}", timeout=timeout)
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        log.info("track page %s failed: %s", track.spotify_id, e)
+        entity = _get_entity("track", track.spotify_id, timeout=timeout)
+    except Exception as e:  # noqa: BLE001 - enrichment is best-effort
+        log.info("track embed %s failed: %s", track.spotify_id, e)
         return
-
-    meta = _parse_meta(resp.text)
-    album_url = meta.get("music:album", "")
-    album_id = album_url.split("?")[0].rstrip("/").rsplit("/", 1)[-1]
-    if album_id and _ID_RE.match(album_id):
-        info = _album_info(album_id)
-        if info.get("name"):
-            track.album = info["name"]
-        if info.get("cover"):
-            track.cover_url = info["cover"]
-            track.cover_is_official = True
-        track.album_artist = info.get("artist") or track.album_artist
-        track.total_tracks = info.get("total") or track.total_tracks
-        track.release_date = info.get("date") or track.release_date
-    else:
-        log.info("track page %s had no album link", track.spotify_id)
-
-    if not track.artist:
-        track.artist = meta.get("music:musician_description", "").strip()
-
-    num = meta.get("music:album:track", "")
-    if num.isdigit():
-        track.track_number = int(num)
-    date = meta.get("music:release_date", "")
-    if date and not track.release_date:
-        track.release_date = date[:10]
+    cover = _extract_cover(entity)
+    if cover:
+        track.cover_url = cover
+        track.cover_is_official = True
+    track.release_date = track.release_date or _release_date(entity)
+    track.artist = track.artist or _artist_text(entity)
 
 
 def _enrich_track_albums(
     tracks: list[Track], workers: int = 6, progress: Optional[Callable[[int, int], None]] = None
 ) -> None:
-    """Fill in each playlist track's real album (the playlist page itself
-    only gives title/artist). Fetches each track's public page, which is
-    the same no-login data Spotify shows a logged-out visitor."""
+    """Fill in each playlist track's album cover and release date (the
+    playlist itself only lists title/artist) from its public embed -- the
+    same no-login data Spotify shows a logged-out visitor."""
     total = len(tracks)
     done = 0
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="enrich") as pool:

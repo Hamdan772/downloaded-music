@@ -188,7 +188,7 @@ Right-click it → *Use a Different YouTube Link…* and paste the right one. In
 <details>
 <summary><b>The Album column is empty, or a song has the wrong cover</b></summary>
 
-Spotify sometimes rate-limits its per-song lookups on big playlists. With **Official album cover & info** on (the default), melograb then looks the song up on Apple Music for its album, cover and details, and falls back to YouTube Music's album name if that fails too.
+Spotify's public pages give each song's album cover and release date but no longer its album name, so melograb gets the album name, track number and genre from Apple Music (**Official album cover & info**, on by default), matching the exact release by its date. If Apple Music doesn't have the song, YouTube Music's album name is used. The Album column fills in as songs finish downloading.
 </details>
 
 <details>

@@ -132,3 +132,18 @@ def test_rate_limiter_spaces_calls(monkeypatch):
     limiter.acquire()
     limiter.acquire()  # third call within the minute has to wait
     assert slept and sum(slept) >= 59.9
+
+
+def test_release_date_picks_album_over_single(fake_search):
+    _, responses = fake_search
+    responses["song"] = [
+        song(collectionName="Husk - Single", releaseDate="2019-03-21T07:00:00Z"),
+        song(collectionName="Oncle Jazz", releaseDate="2019-11-08T08:00:00Z"),
+    ]
+    t = Track("Husk", "Men I Trust", duration_ms=215000, release_date="2019-11-08")
+    apple_music.enrich(t)
+    assert t.album == "Oncle Jazz"
+
+    t = Track("Husk", "Men I Trust", duration_ms=215000, release_date="2019-03-21")
+    apple_music.enrich(t)
+    assert t.album == "Husk"  # " - Single" dropped, like Spotify names it

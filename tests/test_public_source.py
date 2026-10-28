@@ -1,7 +1,7 @@
 import pytest
 
 from melograb import public_source
-from melograb.public_source import _parse_meta, parse_spotify_url
+from melograb.public_source import parse_spotify_url
 
 ID = "37i9dQZF1DXcxvFzl58uP7"
 
@@ -37,18 +37,6 @@ def test_parse_spotify_url_rejects(url):
         parse_spotify_url(url)
 
 
-def test_parse_meta_any_attribute_order_and_entities():
-    page = """
-    <meta content="https://open.spotify.com/album/AAAAAAAAAAAAAAAAAAAAAA" name="music:album"/>
-    <meta name='music:album:track' content='7'>
-    <meta property="og:title" content="Rock &amp; Roll">
-    """
-    meta = _parse_meta(page)
-    assert meta["music:album"].endswith("AAAAAAAAAAAAAAAAAAAAAA")
-    assert meta["music:album:track"] == "7"
-    assert meta["og:title"] == "Rock & Roll"
-
-
 class _Resp:
     def __init__(self, text, status=200):
         self.text = text
@@ -59,56 +47,41 @@ class _Resp:
             raise public_source.requests.HTTPError(str(self.status_code))
 
 
-def test_playlist_tracks_get_their_own_album_and_cover(monkeypatch):
-    album_id = "B" * 22
+def test_playlist_tracks_get_their_own_cover_and_date(monkeypatch):
     playlist = {
         "name": "Bedroom Pop",
         "coverArt": {"sources": [{"url": "playlist-small", "width": 60}, {"url": "playlist-big", "width": 640}]},
         "trackList": [
             {"title": "Mosquito", "subtitle": "PinkPantheress", "uri": "spotify:track:" + "T" * 22, "duration": 1000},
-            {"title": "No Album", "subtitle": "Someone", "uri": "spotify:track:" + "U" * 22, "duration": 2000},
+            {"title": "No Embed", "subtitle": "Someone", "uri": "spotify:track:" + "U" * 22, "duration": 2000},
         ],
     }
-    album = {
-        "name": "Fancy That",
-        "subtitle": "PinkPantheress",
-        "visualIdentity": {"image": [{"url": "album-big", "maxWidth": 640}]},
-        "trackList": [{}] * 9,
+    # Shape of a real /embed/track entity (no album name, but the album's art).
+    track_embed = {
+        "name": "Mosquito",
+        "artists": [{"name": "PinkPantheress"}],
         "releaseDate": {"isoString": "2025-05-09T00:00:00Z"},
+        "visualIdentity": {"image": [{"url": "album-300", "maxWidth": 300}, {"url": "album-640", "maxWidth": 640}]},
     }
 
     def fake_entity(kind, item_id, timeout=20):
-        return playlist if kind == "playlist" else album
-
-    class FakeSession:
-        def get(self, url, timeout=None):
-            if url.endswith("T" * 22):
-                return _Resp(
-                    f'<meta name="music:album" content="https://open.spotify.com/album/{album_id}">'
-                    '<meta name="music:album:track" content="3">'
-                )
-            return _Resp("<html>no meta</html>")
+        if kind == "playlist":
+            return playlist
+        if item_id == "T" * 22:
+            return track_embed
+        raise ValueError("embed failed")
 
     monkeypatch.setattr(public_source, "_get_entity", fake_entity)
-    monkeypatch.setattr(public_source, "_http", lambda: FakeSession())
-    public_source._album_cache.clear()
-
     progress = []
     coll = public_source.fetch_collection(
         f"https://open.spotify.com/playlist/{ID}", progress=lambda d, t: progress.append((d, t))
     )
     first, second = coll.tracks
     assert coll.cover_url == "playlist-big"
-    assert (first.album, first.track_number, first.total_tracks) == ("Fancy That", 3, 9)
-    assert first.cover_url == "album-big"  # not the playlist's cover
-    assert first.album_artist == "PinkPantheress"
-    assert first.release_date == "2025-05-09"
-    assert first.position == 1
-    assert first.cover_is_official
-    # Un-enrichable track: no fake track number from its playlist position,
-    # and never the playlist's cover (the album art is looked up later).
-    assert (second.album, second.track_number, second.cover_url) == ("", 0, "")
-    assert not second.cover_is_official
+    assert (first.cover_url, first.cover_is_official, first.release_date) == ("album-640", True, "2025-05-09")
+    assert first.track_number == 0 and first.position == 1  # no fake track number from the playlist position
+    # No embed: never the playlist's cover (the album art is looked up later).
+    assert (second.cover_url, second.cover_is_official) == ("", False)
     assert progress[-1] == (2, 2)
 
 
@@ -131,31 +104,17 @@ def test_single_track_link(monkeypatch):
     track_entity = {
         "name": "Husk",
         "artists": [{"name": "Men I Trust"}],
-        "duration": 200_000,
+        "duration": 204_651,
         "isExplicit": True,
-        "visualIdentity": {"image": [{"url": "track-cover", "maxWidth": 300}]},
+        "releaseDate": {"isoString": "2019-11-08T00:00:00Z"},
+        "visualIdentity": {"image": [{"url": "album-cover", "maxWidth": 640}]},
     }
-    album = {"name": "Oncle Jazz", "subtitle": "Men I Trust", "trackList": [{}] * 24,
-             "visualIdentity": {"image": [{"url": "album-cover", "maxWidth": 640}]}}
-
-    def fake_entity(kind, item_id, timeout=20):
-        return track_entity if kind == "track" else album
-
-    class FakeSession:
-        def get(self, url, timeout=None):
-            return _Resp(
-                f'<meta name="music:album" content="https://open.spotify.com/album/{"C" * 22}">'
-                '<meta name="music:album:track" content="11">'
-            )
-
-    monkeypatch.setattr(public_source, "_get_entity", fake_entity)
-    monkeypatch.setattr(public_source, "_http", lambda: FakeSession())
-    public_source._album_cache.clear()
+    monkeypatch.setattr(public_source, "_get_entity", lambda kind, item_id, timeout=20: track_entity)
     coll = public_source.fetch_collection(f"https://open.spotify.com/track/{ID}")
     (t,) = coll.tracks
     assert coll.kind == "track" and coll.name == "Men I Trust - Husk"
-    assert (t.title, t.artist, t.album, t.track_number, t.total_tracks) == ("Husk", "Men I Trust", "Oncle Jazz", 11, 24)
-    assert t.explicit and t.cover_url == "album-cover" and t.spotify_id == ID
+    assert (t.title, t.artist, t.release_date, t.duration_ms) == ("Husk", "Men I Trust", "2019-11-08", 204_651)
+    assert t.explicit and t.cover_url == "album-cover" and t.cover_is_official and t.spotify_id == ID
 
 
 def test_artist_link_is_top_tracks(monkeypatch):

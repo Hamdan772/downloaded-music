@@ -132,6 +132,16 @@ def find_song(track: Track, country: str = "US") -> Optional[dict]:
                 continue
         score = title_s * 0.5 + artist_s * 0.3
         score += 0.2 * (_album_score(track.album, r.get("collectionName", "")) if track.album else 50)
+        # The same song is often on a single *and* an album; the release date
+        # Spotify reports picks the right one.
+        released = str(r.get("releaseDate") or "")[:10]
+        if track.release_date and released:
+            if released == track.release_date[:10]:
+                score += 15
+            elif released[:4] == track.release_date[:4]:
+                score += 5
+        if not _RELEASE_SUFFIX_RE.search(r.get("collectionName", "")):
+            score += 2  # all else equal, the album over the single
         # Prefer the original release over compilations/"Greatest Hits".
         if r.get("collectionArtistName", "").lower() == "various artists":
             score -= 10

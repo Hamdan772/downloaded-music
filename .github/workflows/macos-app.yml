@@ -20,6 +20,7 @@ jobs:
   build:
     name: DMG (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     env:
       HAS_SIGNING_CERT: ${{ secrets.MACOS_CERTIFICATE != '' }}
     strategy:

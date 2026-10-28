@@ -215,11 +215,13 @@ packaging/build_macos.sh        # → dist/melograb-<version>-macos-<arch>.dmg
 
 This fetches static ffmpeg/ffprobe and deno for your CPU, builds `melograb.app` with PyInstaller, runs the app's own self-test, and wraps it in a drag-to-install DMG. GitHub Actions does the same for Apple Silicon and Intel on every relevant push (DMGs are under the run's **Artifacts**).
 
-**Releasing:** bump `__version__` in `melograb/__init__.py`, add a section to [CHANGELOG.md](CHANGELOG.md), then push a matching tag. CI builds both DMGs and publishes a release with the changelog as notes:
+**Releasing:** bump `__version__` in `melograb/__init__.py` and add a section to [CHANGELOG.md](CHANGELOG.md). Then either run **Actions › macOS app › Run workflow** with *Publish a GitHub release* ticked (it creates the `v<version>` tag for you), or push the tag yourself:
 
 ```bash
-git tag v0.4.0 && git push origin v0.4.0
+git tag v0.5.0 && git push origin v0.5.0
 ```
+
+Either way CI builds both DMGs, checks the version, and publishes the release with the changelog section as its notes.
 
 **Signing and notarizing** (removes the first-launch warning) needs an Apple Developer account. Add these repository secrets and CI handles the rest: `MACOS_CERTIFICATE` (base64 of a *Developer ID Application* .p12), `MACOS_CERTIFICATE_PASSWORD`, `MACOS_SIGN_IDENTITY` (e.g. `Developer ID Application: Your Name (TEAMID)`), and `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD` (an app-specific password).
 

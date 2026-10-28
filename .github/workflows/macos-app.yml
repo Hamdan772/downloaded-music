@@ -1,10 +1,17 @@
 name: macOS app
 
 # Builds melograb.app + a drag-to-install DMG for Apple Silicon and Intel,
-# self-tests the finished app, and attaches the DMGs to a GitHub release
-# when a v* tag is pushed. Download the DMGs from the run's "Artifacts".
+# self-tests the finished app, and publishes a GitHub release with the DMGs
+# when a v* tag is pushed -- or when run by hand with "release" ticked, in
+# which case the workflow creates the v<version> tag itself. Every run's
+# DMGs are also under its "Artifacts".
 on:
   workflow_dispatch:
+    inputs:
+      release:
+        description: "Publish a GitHub release (creates tag v<version> from melograb/__init__.py)"
+        type: boolean
+        default: false
   push:
     branches: ["**"]
     tags: ["v*"]
@@ -83,13 +90,28 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release)
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # to see existing tags
+
+      - name: Work out the version and tag
+        id: meta
+        run: |
+          version="$(python3 -c 'import melograb; print(melograb.__version__)')"
+          tag="v${version}"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            [ "${GITHUB_REF_NAME}" = "$tag" ] || { echo "::error::tag ${GITHUB_REF_NAME} != $tag"; exit 1; }
+          elif git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "::error::$tag already exists -- bump __version__ in melograb/__init__.py first"; exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - uses: actions/download-artifact@v4
         with:
@@ -97,6 +119,8 @@ jobs:
           merge-multiple: true
 
       - name: Prepare assets and notes
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
           mkdir release
           # Stable names, so README links to releases/latest/download/... always work.
@@ -105,8 +129,7 @@ jobs:
             cp "$f" "release/melograb-macos-${arch}"
           done
           (cd release && sha256sum *.dmg > SHA256SUMS.txt)
-          version="${GITHUB_REF_NAME#v}"
-          awk -v v="$version" '
+          awk -v v="$VERSION" '
             $0 ~ "^## \\[" v "\\]" {on=1; next}
             on && /^## \[/ {exit}
             on {print}
@@ -122,8 +145,11 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
-          name: melograb ${{ github.ref_name }}
+          tag_name: ${{ steps.meta.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: melograb ${{ steps.meta.outputs.tag }}
           body_path: notes.md
+          make_latest: true
           files: |
             release/*.dmg
             release/SHA256SUMS.txt

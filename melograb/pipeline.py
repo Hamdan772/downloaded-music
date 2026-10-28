@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from . import downloader, lyrics, tag, youtube_match
+from . import downloader, env, lyrics, tag, youtube_match
 from . import template as templates
 from .track import Track, sanitize_filename
 
@@ -103,6 +103,7 @@ def process_one(track: Track, out_dir: str, options: Options) -> Result:
         downloaded = None
         used = best
         errors = []
+        cutting = options.remove_non_music and env.has_ffprobe()
         for cand in candidates[:2]:
             try:
                 downloaded = downloader.download_audio(
@@ -111,7 +112,7 @@ def process_one(track: Track, out_dir: str, options: Options) -> Result:
                     stem,
                     options.fmt,
                     quality=options.quality,
-                    remove_non_music=options.remove_non_music and cand.get("resultType") != "song",
+                    remove_non_music=cutting and cand.get("resultType") != "song",
                 )
                 used = cand
                 break

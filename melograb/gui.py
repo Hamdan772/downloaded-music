@@ -23,7 +23,18 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 import requests
 
-from . import __version__, downloader, env, library, pipeline, public_source, sources, ytmusic_source
+from . import (
+    __repo__,
+    __version__,
+    downloader,
+    env,
+    library,
+    pipeline,
+    public_source,
+    sources,
+    ytdlp_updates,
+    ytmusic_source,
+)
 from . import template as templates
 from .track import Track
 
@@ -166,10 +177,30 @@ class MelograbApp(tk.Tk):
         self._build_widgets()
         self._apply_theme()
         self._show_environment_warnings()
-        threading.Thread(target=self._check_ytdlp_worker, daemon=True).start()
+        threading.Thread(target=self._check_updates_worker, daemon=True).start()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.bind("<FocusIn>", self._maybe_autofill, add="+")
+        self._caffeinate = None
+        if IS_MAC:
+            self._install_mac_handlers()
         self.after(100, self._poll_queue)
+
+    def _install_mac_handlers(self):
+        """Hook the parts of macOS that live outside the window: the app menu's
+        About/Quit, and files dropped on the Dock icon."""
+        try:
+            self.createcommand("tkAboutDialog", self.on_about)
+            self.createcommand("::tk::mac::Quit", self.on_close)
+            self.createcommand("::tk::mac::OpenDocument", self._on_open_documents)
+        except tk.TclError:
+            pass
+
+    def _on_open_documents(self, *paths):
+        csvs = [p for p in paths if p.lower().endswith(".csv")]
+        if not csvs or self.busy:
+            return
+        self.link_var.set(" ".join(csvs) if len(csvs) > 1 else csvs[0])
+        self.on_fetch()
 
     def _wants_dark(self) -> bool:
         theme = self.settings.get("theme", "system")
@@ -204,6 +235,7 @@ class MelograbApp(tk.Tk):
         tools.add_command(label="Update yt-dlp", command=self.on_update_ytdlp,
                           state="normal" if env.can_self_update() else "disabled")
         tools.add_separator()
+        tools.add_command(label="Run Diagnostics…", command=self.on_diagnostics)
         tools.add_command(label="Show Log", command=self.on_open_log)
         menubar.add_cascade(label="Tools", menu=tools)
 
@@ -212,6 +244,15 @@ class MelograbApp(tk.Tk):
         for value, label in (("system", "Match System"), ("light", "Light"), ("dark", "Dark")):
             view.add_radiobutton(label=label, value=value, variable=self.theme_var, command=self.on_theme_change)
         menubar.add_cascade(label="Appearance", menu=view)
+
+        help_menu = tk.Menu(menubar, tearoff=False)
+        if not IS_MAC:  # macOS puts About in the app menu (see _install_mac_handlers)
+            help_menu.add_command(label="About melograb", command=self.on_about)
+        help_menu.add_command(label="Troubleshooting…", command=lambda: webbrowser.open(
+            f"https://github.com/{__repo__}#troubleshooting"))
+        help_menu.add_command(label="Releases…", command=lambda: webbrowser.open(
+            f"https://github.com/{__repo__}/releases"))
+        menubar.add_cascade(label="Help", menu=help_menu)
 
         self.config(menu=menubar)
         self.bind_all(f"<{mod}-o>", lambda e: self.on_import_csv())
@@ -278,6 +319,7 @@ class MelograbApp(tk.Tk):
                         bordercolor=c["border"], lightcolor=c["accent"], darkcolor=c["accent"])
 
         self.cover_label.configure(bg=c["surface"], highlightbackground=c["border"])
+        self.empty_label.configure(bg=c["surface"], fg=c["subtext"])
         self.tree.tag_configure("odd", background=c["stripe"])
         self.tree.tag_configure("done", foreground=c["done"])
         self.tree.tag_configure("failed", foreground=c["failed"])
@@ -301,10 +343,7 @@ class MelograbApp(tk.Tk):
 
         # Banner for problems that will make downloads fail.
         self.banner = ttk.Frame(outer, style="Warn.TFrame", padding=(10, 6))
-        self.banner_label = ttk.Label(self.banner, style="Warn.TLabel", wraplength=640, justify="left")
-        self.banner_label.pack(side="left", fill="x", expand=True)
-        self.banner_btn = ttk.Button(self.banner, text="Update now", style="Warn.TButton", command=self.on_update_ytdlp)
-        self.banner_lines: list = []
+        self.banner_rows: dict = {}  # key -> (row frame, button or None)
 
         header = ttk.Frame(outer)
         header.pack(fill="x", pady=(0, 14))
@@ -369,6 +408,13 @@ class MelograbApp(tk.Tk):
         self.tree.configure(yscrollcommand=vsb.set)
         self.tree.pack(side="left", fill="both", expand=True)
         vsb.pack(side="right", fill="y")
+        self.empty_label = tk.Label(
+            self.tree, justify="center", font=FONT_SMALL, bd=0,
+            text="Paste a Spotify or YouTube Music link above — playlist, album, song or artist\n"
+                 "or just type a song, like “mac demarco - chamber of reflection”\n\n"
+                 "You can paste several at once, or drop a CSV export on the Dock icon.",
+        )
+        self.empty_label.place(relx=0.5, rely=0.45, anchor="center")
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
         self.tree.bind("<Button-1>", self._on_tree_click)
         self.tree.bind("<space>", self._on_space)
@@ -466,22 +512,42 @@ class MelograbApp(tk.Tk):
 
     # ---------- banner ----------
 
-    def _add_banner_line(self, text: str, with_update_button: bool = False):
-        self.banner_lines.append(f"⚠  {text}")
-        self.banner_label.configure(text="\n".join(self.banner_lines))
-        if with_update_button and env.can_self_update():
-            self.banner_btn.pack(side="right", padx=(10, 0))
+    def _add_banner(self, key: str, text: str, button: str = "", command=None, icon: str = "⚠"):
+        self._remove_banner(key)
+        row = ttk.Frame(self.banner, style="Warn.TFrame")
+        row.pack(fill="x", pady=2)
+        ttk.Label(row, text=f"{icon}  {text}", style="Warn.TLabel", wraplength=640, justify="left").pack(
+            side="left", fill="x", expand=True
+        )
+        btn = None
+        if button and command:
+            btn = ttk.Button(row, text=button, style="Warn.TButton", command=command)
+            btn.pack(side="right", padx=(10, 0))
+        self.banner_rows[key] = (row, btn)
         if not self.banner.winfo_ismapped():
             self.banner.pack(fill="x", pady=(0, 12), before=self.header)
 
-    def _show_environment_warnings(self):
-        for w in env.environment_warnings():
-            self._add_banner_line(w)
+    def _remove_banner(self, key: str):
+        row = self.banner_rows.pop(key, None)
+        if row:
+            row[0].destroy()
+        if not self.banner_rows and self.banner.winfo_ismapped():
+            self.banner.pack_forget()
 
-    def _check_ytdlp_worker(self):
+    def _show_environment_warnings(self):
+        for i, w in enumerate(env.environment_warnings()):
+            self._add_banner(f"env{i}", w)
+
+    def _check_updates_worker(self):
         warning = env.ytdlp_update_warning()
         if warning:
-            self.msg_queue.put(("banner", warning, True))
+            self.msg_queue.put(("banner", "ytdlp", warning, "Update now", "update_ytdlp"))
+        release = env.latest_app_release(__repo__)
+        if release and ytdlp_updates.version_key(release["version"]) > ytdlp_updates.version_key(__version__):
+            self.msg_queue.put((
+                "banner", "app", f"melograb {release['version']} is available (you have {__version__}).",
+                "Download", ("open_url", release["url"]),
+            ))
 
     # ---------- cover art ----------
 
@@ -490,7 +556,11 @@ class MelograbApp(tk.Tk):
             return
         img = Image.new("RGBA", (56, 56), (0, 0, 0, 0))
         ImageDraw.Draw(img).rounded_rectangle([0, 0, 55, 55], radius=10, fill=self.c["placeholder"])
-        self.cover_photo = ImageTk.PhotoImage(img)
+        try:
+            self.cover_photo = ImageTk.PhotoImage(img)
+        except Exception:  # noqa: BLE001 - cosmetic; never let artwork stop the app
+            log.exception("couldn't render cover placeholder")
+            return
         self.cover_label.configure(image=self.cover_photo)
 
     def _set_cover_from_url(self, url: str):
@@ -514,6 +584,7 @@ class MelograbApp(tk.Tk):
 
     def _set_busy(self, busy: bool):
         self.busy = busy
+        self._keep_awake(busy)
         state = "disabled" if busy else "normal"
         self.fetch_btn.config(state=state)
         self.csv_btn.config(state=state)
@@ -521,6 +592,17 @@ class MelograbApp(tk.Tk):
         if busy:
             self.retry_btn.pack_forget()
             self.open_folder_btn.pack_forget()
+
+    def _keep_awake(self, on: bool):
+        """Stop the Mac idle-sleeping in the middle of a long download."""
+        if on and IS_MAC and self._caffeinate is None and shutil.which("caffeinate"):
+            try:
+                self._caffeinate = subprocess.Popen(["caffeinate", "-i", "-w", str(os.getpid())])
+            except OSError:
+                self._caffeinate = None
+        elif not on and self._caffeinate is not None:
+            self._caffeinate.terminate()
+            self._caffeinate = None
 
     def _workers(self) -> int:
         try:
@@ -811,10 +893,9 @@ class MelograbApp(tk.Tk):
             messagebox.showinfo("No log yet", f"Nothing has been logged yet.\n({path})")
 
     def on_update_ytdlp(self):
-        if not env.can_self_update():
-            messagebox.showinfo("Update yt-dlp", "This build can't update itself — download a newer melograb.app.")
-            return
-        self.banner_btn.config(state="disabled", text="Updating…")
+        btn = self.banner_rows.get("ytdlp", (None, None))[1]
+        if btn is not None:
+            btn.config(state="disabled", text="Updating…")
         self.status_var.set("Updating yt-dlp…")
 
         def work():
@@ -977,11 +1058,23 @@ class MelograbApp(tk.Tk):
             pass
         self.after(100, self._poll_queue)
 
+    def _on_msg_call(self, fn, arg):
+        try:
+            fn(arg)
+        except tk.TclError:  # target window was closed meanwhile
+            pass
+
     def _on_msg_status(self, text):
         self.status_var.set(text)
 
-    def _on_msg_banner(self, text, with_update_button):
-        self._add_banner_line(text, with_update_button)
+    def _on_msg_banner(self, key, text, button, action):
+        if action == "update_ytdlp":
+            command = self.on_update_ytdlp
+        elif isinstance(action, tuple) and action[0] == "open_url":
+            command = lambda url=action[1]: webbrowser.open(url)  # noqa: E731
+        else:
+            command = None
+        self._add_banner(key, text, button, command, icon="⚠" if key != "app" else "✨")
 
     def _on_msg_fetched(self, collection):
         self._set_busy(False)
@@ -994,7 +1087,11 @@ class MelograbApp(tk.Tk):
         messagebox.showerror("Something went wrong", text)
 
     def _on_msg_cover(self, img):
-        self.cover_photo = ImageTk.PhotoImage(img)
+        try:
+            self.cover_photo = ImageTk.PhotoImage(img)
+        except Exception:  # noqa: BLE001
+            log.exception("couldn't render cover art")
+            return
         self.cover_label.configure(image=self.cover_photo)
 
     def _on_msg_started(self, idx):
@@ -1045,14 +1142,99 @@ class MelograbApp(tk.Tk):
             _notify("melograb", f"{ok} downloaded" + (f", {len(failed)} failed" if failed else ""))
 
     def _on_msg_updated(self, ok, output):
-        self.banner_btn.config(state="normal", text="Update now")
-        if ok:
-            self.banner_btn.pack_forget()
-            self.status_var.set("yt-dlp updated — restart melograb to use it.")
-            messagebox.showinfo("yt-dlp updated", "Done. Quit and reopen melograb to use the new version.")
-        else:
+        btn = self.banner_rows.get("ytdlp", (None, None))[1]
+        if btn is not None:
+            btn.config(state="normal", text="Update now")
+        if not ok:
             self.status_var.set("yt-dlp update failed.")
-            messagebox.showerror("Update failed", output or "pip failed without output.")
+            messagebox.showerror("Update failed", output or "The update failed without saying why — see the log.")
+            return
+        if "already up to date" in output:
+            self._remove_banner("ytdlp")
+            self.status_var.set(output)
+            messagebox.showinfo("yt-dlp", output)
+            return
+        self._remove_banner("ytdlp")
+        self.status_var.set("yt-dlp updated — restart melograb to use it.")
+        if not self.busy and messagebox.askyesno("yt-dlp updated", "Restart melograb now to use the new version?"):
+            self._restart()
+
+    def _restart(self):
+        self._persist_settings()
+        if env.is_frozen() and IS_MAC:
+            # .../melograb.app/Contents/MacOS/melograb -> relaunch the bundle
+            bundle = os.path.abspath(os.path.join(os.path.dirname(sys.executable), "..", ".."))
+            subprocess.Popen(["/bin/sh", "-c", f"sleep 1; open -n {json.dumps(bundle)}"])
+            self.destroy()
+        elif env.is_frozen():
+            self.destroy()
+            os.execv(sys.executable, [sys.executable])
+        else:
+            self.destroy()
+            os.execv(sys.executable, [sys.executable, "-m", "melograb.gui"])
+
+    def on_diagnostics(self):
+        """Run the self-test and show its report in a copyable window."""
+        from . import selftest
+
+        win = tk.Toplevel(self)
+        win.title("melograb diagnostics")
+        win.geometry("720x420")
+        win.configure(bg=self.c["bg"])
+        text = tk.Text(win, wrap="word", font=FONT_MONO, bg=self.c["surface"], fg=self.c["text"],
+                       insertbackground=self.c["text"], relief="flat", padx=12, pady=12, highlightthickness=0)
+        text.pack(fill="both", expand=True)
+        row = ttk.Frame(win, padding=10)
+        row.pack(fill="x")
+        online_btn = ttk.Button(row, text="Also test a real download", style="Ghost.TButton")
+        online_btn.pack(side="left")
+
+        def copy():
+            self.clipboard_clear()
+            self.clipboard_append(text.get("1.0", "end").strip())
+
+        ttk.Button(row, text="Copy Report", style="Ghost.TButton", command=copy).pack(side="right")
+
+        def append(line):
+            text.insert("end", line + "\n")
+            text.see("end")
+
+        def start(online):
+            online_btn.config(state="disabled")
+            text.delete("1.0", "end")
+
+            def work():
+                selftest.run(online=online, emit=lambda line: self.msg_queue.put(("call", append, line)))
+                self.msg_queue.put(("call", lambda _: online_btn.config(state="normal"), None))
+
+            threading.Thread(target=work, daemon=True).start()
+
+        online_btn.config(command=lambda: start(True))
+        start(False)
+
+    def on_about(self):
+        ffmpeg = shutil.which("ffmpeg") or ""
+        bundled = env.bundled_bin_dir()
+
+        def where(path):
+            if not path:
+                return "not found"
+            return "bundled" if bundled and path.startswith(bundled) else path
+
+        runtimes = env.available_js_runtimes()
+        js = shutil.which(runtimes[0]) if runtimes else ""
+        lines = [
+            f"melograb {__version__}",
+            "",
+            f"yt-dlp {ytdlp_updates.active_version() or '?'}",
+            f"ffmpeg: {where(ffmpeg)}",
+            f"ffprobe: {where(shutil.which('ffprobe') or '')}",
+            f"JavaScript runtime: {runtimes[0] + ' (' + where(js) + ')' if runtimes else 'not found'}",
+            "",
+            "Metadata from Spotify's public pages and YouTube Music; lyrics from lrclib.net;",
+            "non-music sections from SponsorBlock. For personal use only.",
+        ]
+        messagebox.showinfo("About melograb", "\n".join(lines))
 
     def _on_msg_lyrics_progress(self, n, total):
         self.progress.config(value=n)
@@ -1080,6 +1262,8 @@ class MelograbApp(tk.Tk):
         self.checked = set(range(len(tracks)))
         self.filter_var.set("")
         self.tree.delete(*self.tree.get_children())
+        if tracks:
+            self.empty_label.place_forget()
         for i, t in enumerate(tracks):
             self.tree.insert(
                 "", "end", iid=str(i),

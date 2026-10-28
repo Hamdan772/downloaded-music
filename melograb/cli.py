@@ -7,7 +7,7 @@ import threading
 
 from tqdm import tqdm
 
-from . import __version__, downloader, env, library, pipeline, sources
+from . import __version__, downloader, env, library, pipeline, selftest, sources
 from . import template as templates
 
 _EPILOG = """\
@@ -76,6 +76,10 @@ def build_parser() -> argparse.ArgumentParser:
     lib.add_argument("--add-lyrics", metavar="DIR", help="add lyrics to every song already in DIR, then exit")
     lib.add_argument("--overwrite-lyrics", action="store_true", help="with --add-lyrics: replace existing lyrics")
 
+    diag = parser.add_argument_group("diagnostics")
+    diag.add_argument("--self-test", action="store_true", help="check that everything melograb needs works, then exit")
+    diag.add_argument("--online", action="store_true", help="with --self-test: also fetch an album and download a song")
+
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return parser
 
@@ -125,6 +129,8 @@ def main(argv=None):
     env.ensure_tool_paths()
     log_file = env.setup_logging()
 
+    if args.self_test:
+        sys.exit(0 if selftest.run(online=args.online) else 1)
     if args.add_lyrics:
         _add_lyrics(args)
         return

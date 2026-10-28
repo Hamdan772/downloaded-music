@@ -12,6 +12,7 @@ def app(monkeypatch, tmp_path):
     monkeypatch.setattr(gui, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     monkeypatch.setattr(env, "environment_warnings", lambda: [])
     monkeypatch.setattr(env, "ytdlp_update_warning", lambda latest=None: "")
+    monkeypatch.setattr(env, "latest_app_release", lambda repo: {})
     monkeypatch.setattr(env, "has_ffmpeg", lambda: True)
     monkeypatch.setattr(gui, "_system_prefers_dark", lambda: False)
     try:
@@ -90,3 +91,22 @@ def test_bad_template_blocks_download(app, monkeypatch):
     monkeypatch.setattr(pipeline, "run", lambda *a, **k: pytest.fail("should not run"))
     app.on_download()
     assert errors and "unknown field" in errors[0] and not app.busy
+
+
+def test_update_banners(app):
+    app._on_msg_banner("ytdlp", "yt-dlp is old", "Update now", "update_ytdlp")
+    app._on_msg_banner("app", "melograb 9.9 is available", "Download", ("open_url", "https://example.invalid"))
+    assert set(app.banner_rows) == {"ytdlp", "app"}
+    app._remove_banner("ytdlp")
+    app._remove_banner("app")
+    assert not app.banner_rows and not app.banner.winfo_ismapped()
+
+
+def test_dropped_csv_is_fetched(app, tmp_path, monkeypatch):
+    csv = tmp_path / "list.csv"
+    csv.write_text("Title,Artist\nHusk,Men I Trust\n")
+    app._on_open_documents(str(csv), "/ignored.txt")
+    app.after(400, app.quit)
+    app.mainloop()
+    drain(app)
+    assert [t.title for t in app.tracks] == ["Husk"] and not app.empty_label.winfo_ismapped()

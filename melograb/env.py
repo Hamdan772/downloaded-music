@@ -28,16 +28,43 @@ _EXTRA_BIN_DIRS = (
 JS_RUNTIMES = ("deno", "node", "bun", "quickjs")
 
 
+def is_frozen() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def bundled_bin_dir() -> str:
+    """Where the packaged app keeps its own ffmpeg/ffprobe/deno ('' if not packaged)."""
+    base = getattr(sys, "_MEIPASS", None)
+    return os.path.join(base, "bin") if base else ""
+
+
 def ensure_tool_paths() -> None:
+    """Bundled tools first (known-good versions), then the usual Homebrew
+    locations that Finder-launched apps don't get on PATH."""
     path = os.environ.get("PATH", "")
     parts = path.split(os.pathsep) if path else []
+    bundled = bundled_bin_dir()
+    if bundled and os.path.isdir(bundled) and bundled not in parts:
+        for name in os.listdir(bundled):
+            exe = os.path.join(bundled, name)
+            if not os.access(exe, os.X_OK):
+                try:
+                    os.chmod(exe, 0o755)
+                except OSError:
+                    pass
+        parts.insert(0, bundled)
     extra = [d for d in _EXTRA_BIN_DIRS if os.path.isdir(d) and d not in parts]
-    if extra:
-        os.environ["PATH"] = os.pathsep.join(parts + extra)
+    os.environ["PATH"] = os.pathsep.join(parts + extra)
 
 
 def has_ffmpeg() -> bool:
-    return shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
+    return shutil.which("ffmpeg") is not None
+
+
+def has_ffprobe() -> bool:
+    # Only needed to cut non-music sections (SponsorBlock); conversion and
+    # tagging work with ffmpeg alone.
+    return shutil.which("ffprobe") is not None
 
 
 def available_js_runtimes() -> list[str]:
@@ -57,8 +84,10 @@ def environment_warnings() -> list[str]:
     warnings = []
     if not has_ffmpeg():
         warnings.append(
-            "ffmpeg/ffprobe not found -- audio can't be converted. Install it (macOS: `brew install ffmpeg`)."
+            "ffmpeg not found -- audio can't be converted. Install it (macOS: `brew install ffmpeg`)."
         )
+    elif not has_ffprobe():
+        warnings.append("ffprobe not found -- non-music intros/outros won't be cut from music videos.")
     if not available_js_runtimes():
         warnings.append(
             "No JavaScript runtime found -- YouTube downloads may fail or be lower quality. "
@@ -160,12 +189,16 @@ def ytdlp_update_warning(latest: str | None = None) -> str:
 
 
 def can_self_update() -> bool:
-    # A PyInstaller bundle can't pip-install into itself.
-    return not getattr(sys, "frozen", False)
+    return True
 
 
 def update_ytdlp(timeout: int = 300) -> tuple[bool, str]:
-    """pip-install the latest yt-dlp into this Python. Takes effect on restart."""
+    """Get the latest yt-dlp: pip in a normal install, downloaded wheels in the
+    packaged app (see ytdlp_updates). Takes effect on restart."""
+    if is_frozen():
+        from . import ytdlp_updates
+
+        return ytdlp_updates.install_latest()
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "pip", "install", "-U", "yt-dlp[default]"],
@@ -175,3 +208,23 @@ def update_ytdlp(timeout: int = 300) -> tuple[bool, str]:
         return False, str(e)
     output = (proc.stdout + proc.stderr).strip()
     return proc.returncode == 0, output[-2000:]
+
+
+def latest_app_release(repo: str, timeout: int = 6) -> dict:
+    """{'version', 'url'} of the newest GitHub release of `repo`, or {} (no
+    releases, private repo, offline...)."""
+    import requests
+
+    try:
+        resp = requests.get(
+            f"https://api.github.com/repos/{repo}/releases/latest",
+            headers={"Accept": "application/vnd.github+json"},
+            timeout=timeout,
+        )
+        if resp.status_code != 200:
+            return {}
+        data = resp.json()
+        version = str(data.get("tag_name") or "").lstrip("vV")
+        return {"version": version, "url": data.get("html_url") or ""} if version else {}
+    except Exception:  # noqa: BLE001
+        return {}

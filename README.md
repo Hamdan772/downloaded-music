@@ -14,7 +14,17 @@ Takes the useful idea from both `spotdl` and `CSVmusic` and merges them into one
 
 It never touches Spotify's actual audio streams or DRM — like both tools it inspired, it re-sources audio from YouTube using Spotify (or your CSV) only for metadata/track identity.
 
-## Setup
+## Install
+
+### Mac app (recommended)
+
+Download the DMG for your Mac from the [latest release](https://github.com/Hamdan772/downloaded-music/releases/latest) — `macos-arm64` for Apple Silicon (M1 and newer), `macos-x86_64` for Intel — open it and drag **melograb** into **Applications**. Everything is included: ffmpeg, ffprobe and deno are bundled, so there's nothing else to install.
+
+The app isn't notarized by Apple, so the first launch needs one extra step: right-click melograb in Applications and choose **Open** (on macOS 15+, try to open it once, then go to **System Settings › Privacy & Security** and click **Open Anyway**). After that it opens normally.
+
+YouTube changes often; when the bundled yt-dlp gets old, melograb shows an **Update now** banner that downloads the newest yt-dlp into the app — no reinstall needed.
+
+### From source
 
 Requires Python 3.11+.
 
@@ -41,7 +51,8 @@ Paste one or more links (or type a song) and click **Fetch** — a link you just
 
 - **Click a row** to see what it matched on YouTube, or why it failed.
 - **Right-click a row** to open it on YouTube, swap in a different YouTube link, download just that track, or show it in Finder.
-- **Tools ›** *Add Lyrics to Existing Folder…*, *Update yt-dlp*, *Show Log*. **Appearance ›** light / dark / match system.
+- **Tools ›** *Add Lyrics to Existing Folder…*, *Update yt-dlp*, *Run Diagnostics…*, *Show Log*. **Appearance ›** light / dark / match system.
+- Drop a CSV export on the Dock icon to load it. The Mac stays awake while a download runs, and you get a notification when a long one finishes.
 
 Your output folder, format, layout and options are remembered between runs.
 
@@ -76,16 +87,23 @@ The CLI exits with status 2 if any track failed, and prints the failures grouped
 | Artist / Album / ## Title | `{album_artist}/{album}/{track:02} {title}` | `Men I Trust/Oncle Jazz/07 Husk.mp3` |
 | Playlist folder, in order | `{playlist}/{position:03} {artist} - {title}` | `Chill/012 Men I Trust - Husk.mp3` |
 
-### Standalone macOS app
+### Building the Mac app yourself
 
 ```bash
-pip install pyinstaller
-scripts/build_macos_app.sh   # -> dist/melograb.app
+packaging/build_macos.sh     # -> dist/melograb-<version>-macos-<arch>.dmg
 ```
 
-ffmpeg and deno aren't bundled; the app finds Homebrew's copies even when launched from Finder.
+This fetches static ffmpeg/ffprobe and deno for your CPU, builds `melograb.app` with PyInstaller, runs the app's own self-test, and wraps it in a drag-to-install DMG. GitHub Actions does the same for Apple Silicon and Intel on every relevant push (grab the DMGs from the run's **Artifacts**) and attaches them to a release when you push a `v*` tag:
+
+```bash
+git tag v0.4.0 && git push origin v0.4.0
+```
+
+To ship a signed and notarized build (no first-launch warning), add these repository secrets: `MACOS_CERTIFICATE` (base64 of your Developer ID Application .p12), `MACOS_CERTIFICATE_PASSWORD`, `MACOS_SIGN_IDENTITY` (e.g. `Developer ID Application: Your Name (TEAMID)`), and for notarization `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD` (an app-specific password).
 
 ## Troubleshooting
+
+**Something's not working.** Run *Tools › Run Diagnostics* in the app (or `python -m melograb --self-test`): it checks every component and can test a real download, and **Copy Report** gives you something to paste into an issue.
 
 **Every track fails.** That almost always means YouTube changed something and yt-dlp needs updating. The GUI checks on startup and offers an **Update now** button; or run:
 
